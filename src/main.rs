@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use std::io::Read;
 use std::rc::Rc;
 use parser::Summary;
-use types::{Environment, Idx, Node, UnparsedObjectData, ObjectSpec};
+use types::{Environment, Idx, Node, ObjectData, ObjectSpec};
 
 struct Importer {
   env: Environment,
   mpath: PathBuf,
-  deferred: VecDeque<(ObjectSpec, UnparsedObjectData)>,
+  deferred: VecDeque<(ObjectSpec, ObjectData)>,
 }
 
 #[derive(Debug)]

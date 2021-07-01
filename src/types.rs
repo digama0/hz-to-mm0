@@ -54,20 +54,10 @@ impl<T> IndexMut<FetchKind> for FetchVec<T> {
 pub struct Fetch(pub FetchKind, pub String);
 
 #[derive(Clone, Debug)]
-pub enum ParsedObjectData {
-  _Thm(ThmId),
-}
-
-#[derive(Clone, Debug)]
-pub struct UnparsedObjectData {
+pub struct ObjectData {
   pub fl1: bool,
   pub fl2: bool,
   pub file: String,
-}
-
-pub enum ObjectData {
-  Unparsed(UnparsedObjectData),
-  _Parsed(ParsedObjectData),
 }
 
 pub trait Idx: Copy {
@@ -297,7 +287,7 @@ impl Environment {
     self.add_thm(FetchKind::TypeBij2, x, ThmDef);
   }
 
-  pub fn add_basic_def<'a>(&mut self, x: impl Into<Cow<'a, str>>) {
+  pub fn add_basic_def<'a>(&mut self, x: impl Into<Cow<'a, str>>, _tys: Dedup<Type>, _tms: Dedup<Term>, _tm: TermId) {
     let x = x.into(); self.add_const(&*x, ConstDef);
     self.add_thm(FetchKind::BasicDef, x, ThmDef);
   }
@@ -325,7 +315,7 @@ impl Environment {
       Object::TypeDecl(x, arity) => self.add_tyop(x, TyopDef {arity}),
       Object::ConstDecl(x, _, _) => self.add_const(x, ConstDef),
       Object::Axiom(x, _, _, _) => self.add_thm(FetchKind::Axiom, x, ThmDef),
-      Object::BasicDef(x, _, _, _) => self.add_basic_def(x),
+      Object::BasicDef(x, tys, tms, tm) => self.add_basic_def(x, tys, tms, tm),
       Object::Def(x, _, _, _) => self.add_def(x),
       Object::Spec(xs, _, _, _) => self.add_spec(Vec::from(xs)),
       Object::BasicTypedef(x, _, _, _) => self.add_basic_typedef(x),

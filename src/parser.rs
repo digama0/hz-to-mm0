@@ -165,7 +165,7 @@ impl TryFrom<&str> for FetchKind {
 }
 
 impl<I: Iterator<Item=u8>> Iterator for Summary<I> {
-  type Item = (ObjectSpec, UnparsedObjectData);
+  type Item = (ObjectSpec, ObjectData);
 
   fn next(&mut self) -> Option<Self::Item> {
     use Token::*;
@@ -185,7 +185,7 @@ impl<I: Iterator<Item=u8>> Iterator for Summary<I> {
     }
     self.next = tk.map(From::from);
 
-    Some((kind, UnparsedObjectData { fl1, fl2, file }))
+    Some((kind, ObjectData { fl1, fl2, file }))
   }
 }
 
@@ -281,19 +281,19 @@ fn parse_type<I: Iterator<Item=u8>>(
   loop {
     // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
     state = match state {
-      State::Start => match *tk.as_ref().unwrap() {
-        TType(i) => { tk = lexer.next(); State::Ret(de.reuse(de.named(i))) }
-        Char('(') => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
-        Ident("V") => { tk = lexer.next();
+      State::Start => match tk {
+        Some(TType(i)) => { tk = lexer.next(); State::Ret(de.reuse(de.named(i))) }
+        Some(Char('(')) => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
+        Some(Ident("V")) => { tk = lexer.next();
           parse! { lexer, tk; let x = Str(v) => v.to_owned(), }
           State::Ret(de.add(Type::Var(x)))
         }
-        Ident("K") => { tk = lexer.next();
+        Some(Ident("K")) => { tk = lexer.next();
           parse! { lexer, tk; let x = Str(v) => v.to_owned(), }
           stk.push(Stack::Comp(x, vec![]));
           State::Start
         }
-        Ident("F") => { tk = lexer.next();
+        Some(Ident("F")) => { tk = lexer.next();
           stk.push(Stack::Fun);
           State::Start
         }
@@ -352,6 +352,7 @@ fn parse_term<I: Iterator<Item=u8>>(
   ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>,
   tys: &Dedup<Type>, de: &mut Dedup<Term>
 ) -> TermId {
+  #[derive(Debug)]
   enum Stack {
     Paren,
     Binop(Binop),
@@ -359,11 +360,13 @@ fn parse_term<I: Iterator<Item=u8>>(
     Bin0,
     Not,
   }
+  #[derive(Debug)]
   enum Binop {
     Comb,
     Bin(Binary),
     Quant(Quant),
   }
+  #[derive(Debug)]
   enum State {
     Start,
     Ret(TermId),
@@ -373,6 +376,7 @@ fn parse_term<I: Iterator<Item=u8>>(
   use Token::{Char, Ident, Str, Int, Type as TType, Term as TTerm};
   let mut state = State::Start;
   loop {
+    // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
     state = match state {
       State::Start => match tk.unwrap() {
         TTerm(i) => { tk = lexer.next(); State::Ret(de.reuse(de.named(i))) }
@@ -446,7 +450,7 @@ fn parse_term<I: Iterator<Item=u8>>(
           stk.push(Stack::Binop(Binop::Quant(Quant::Select)));
           State::Start
         }
-        _ => panic!("parse_term parse error")
+        ref tk => panic!("parse_term parse error: {:?}", tk)
       }
       State::Ret(tm) => match stk.pop() {
         Some(Stack::Paren) => {
@@ -811,6 +815,34 @@ fn parse_proof<I: Iterator<Item=u8>>(
   }
 }
 
+pub fn parse_type_str(de: &mut Dedup<Type>, x: &str) -> TypeId {
+  let mut lexer = Lexer::from(x.bytes());
+  parse_type(&mut lexer.next().map(Token::pack), &mut lexer, de)
+}
+
+fn parse_type_str_preamble(tys: &[&str]) -> Dedup<Type> {
+  let mut de = Dedup::new();
+  for &ty in tys {
+    let n = parse_type_str(&mut de, ty);
+    de.named.push(Idx::into_u32(n));
+  }
+  de
+}
+
+pub fn parse_term_str(tys: &Dedup<Type>, de: &mut Dedup<Term>, tm: &str) -> TermId {
+  let mut lexer = Lexer::from(tm.bytes());
+  parse_term(&mut lexer.next().map(Token::pack), &mut lexer, tys, de)
+}
+
+fn parse_term_str_preamble(tys: &Dedup<Type>, tms: &[&str]) -> Dedup<Term> {
+  let mut de = Dedup::new();
+  for &tm in tms {
+    let n = parse_term_str(tys, &mut de, tm);
+    de.named.push(Idx::into_u32(n));
+  }
+  de
+}
+
 fn parse_term_preamble<I: Iterator<Item=u8>>(
   ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>, tys: &Dedup<Type>,
 ) -> Dedup<Term> {
@@ -944,10 +976,17 @@ impl Environment {
     let fetches = self.parse_fetch_preamble(tk, lexer, &tys);
     Preambles { tys, tms, fetches }
   }
+
+  pub fn parse_basic_def<'a>(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) {
+    let tys = parse_type_str_preamble(tys);
+    let mut tms = parse_term_str_preamble(&tys, tms);
+    let tm = parse_term_str(&tys, &mut tms, tm);
+    self.add_basic_def(x, tys, tms, tm);
+  }
 }
 
 impl Importer {
-  pub fn import_target_object(&mut self, kind: ObjectSpec, data: UnparsedObjectData, defer: bool) -> bool {
+  pub fn import_target_object(&mut self, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
     println!("{:?}", kind);
     let file = self.mpath.join(&data.file);
     let mut lexer = Lexer::from(File::open(file).unwrap().bytes().map(Result::unwrap));
