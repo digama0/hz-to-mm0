@@ -1,15 +1,11 @@
-use crate::types::{ConstDef, Environment, FetchKind, ThmDef, TyopDef};
+use crate::kernel::Environment;
+use crate::types::{ConstDef, FetchKind, ThmDef, TyopDef};
 
 impl Environment {
 
   pub fn new() -> Self {
     use FetchKind::*;
-    let mut env = Self {
-      tyops: vec![],
-      consts: vec![],
-      thms: vec![],
-      trans: Default::default()
-    };
+    let mut env = Self::default();
     env.add_tyop("bool", TyopDef {arity: 0});
     let bool_ty = "K \"bool\"";
     let num_ty = "K \"num\"";
@@ -59,8 +55,8 @@ impl Environment {
     // SND = \p:A#B. @y. ?x. p = x,y`
     env.parse_basic_def("SND", &[a_ty, b_ty, "K \"prod\" z1 z2"], &["V \"p\" z3", vx, vy],
       "L t1 (S t3 (X t2 (E t1 (P t2 t3))))");
-    env.add_const("IND_0", ConstDef);
-    env.add_const("IND_SUC", ConstDef);
+    env.add_const("IND_0", ConstDef {});
+    env.add_const("IND_SUC", ConstDef {});
     // _0 = mk_num IND_0
     env.parse_basic_def("_0", &[], &[], "A (K \"mk_num\") (K \"IND_0\")");
     // SUC = \n. mk_num(IND_SUC(dest_num n))
@@ -93,38 +89,38 @@ impl Environment {
       "L t1 (L t2 (L t3 (L t4 (C (E t3 t1) (E t4 t2)))))");
     env.add_type_bijs("prod", "ABS_prod", "REP_prod");
     // env.add_thm(Thm, "AND_DEF1", ThmDef);
-    env.add_thm(Thm, "EXISTS_THM", ThmDef);
-    env.add_thm(Thm, "EXISTS_UNIQUE_DEF1", ThmDef);
-    env.add_thm(Axiom, "ETA_AX", ThmDef);
-    // env.add_thm(Thm, "IMP_ANTISYM_AX", ThmDef);
-    env.add_thm(Thm, "BOOL_CASES_AX", ThmDef);
-    env.add_thm(Axiom, "SELECT_AX", ThmDef);
-    env.add_thm(Thm, "TRUTH", ThmDef);
-    env.add_thm(Thm, "NOT_TRUE", ThmDef);
-    env.add_thm(Thm, "EXCLUDED_MIDDLE", ThmDef);
-    env.add_thm(Thm, "PAIR_EQ", ThmDef);
-    env.add_thm(Thm, "PAIR_SURJECTIVE", ThmDef);
-    env.add_thm(Thm, "FST", ThmDef);
-    env.add_thm(Thm, "SND", ThmDef);
-    env.add_thm(Axiom, "INFINITY_AX", ThmDef);
-    env.add_thm(Thm, "IND_SUC_0", ThmDef);
-    env.add_thm(Thm, "IND_SUC_INJ", ThmDef);
-    env.add_thm(Thm, "NOT_SUC", ThmDef);
-    env.add_thm(Thm, "SUC_INJ", ThmDef);
-    env.add_thm(Thm, "num_CASES", ThmDef);
-    env.add_thm(Thm, "num_INDUCTION", ThmDef);
-    env.add_thm(Thm, "num_RECURSION", ThmDef);
-    env.add_thm(Thm, "PRE", ThmDef);
-    env.add_thm(Thm, "ADD", ThmDef);
-    env.add_thm(Thm, "SUB", ThmDef);
-    env.add_thm(Thm, "MULT1", ThmDef);
-    env.add_thm(Thm, "EXP", ThmDef);
-    env.add_thm(Thm, "LT", ThmDef);
-    env.add_thm(Thm, "LE1", ThmDef);
-    env.add_thm(Thm, "GT1", ThmDef);
-    env.add_thm(Thm, "GE1", ThmDef);
-    env.add_thm(Thm, "EVEN", ThmDef);
-    env.add_thm(Thm, "ODD1", ThmDef);
+    env.add_thm(Thm, "EXISTS_THM", ThmDef {});
+    env.add_thm(Thm, "EXISTS_UNIQUE_DEF1", ThmDef {});
+    env.add_thm(Axiom, "ETA_AX", ThmDef {});
+    // env.add_thm(Thm, "IMP_ANTISYM_AX", ThmDef {});
+    env.add_thm(Thm, "BOOL_CASES_AX", ThmDef {});
+    env.add_thm(Axiom, "SELECT_AX", ThmDef {});
+    env.add_thm(Thm, "TRUTH", ThmDef {});
+    env.add_thm(Thm, "NOT_TRUE", ThmDef {});
+    env.add_thm(Thm, "EXCLUDED_MIDDLE", ThmDef {});
+    env.add_thm(Thm, "PAIR_EQ", ThmDef {});
+    env.add_thm(Thm, "PAIR_SURJECTIVE", ThmDef {});
+    env.add_thm(Thm, "FST", ThmDef {});
+    env.add_thm(Thm, "SND", ThmDef {});
+    env.add_thm(Axiom, "INFINITY_AX", ThmDef {});
+    env.add_thm(Thm, "IND_SUC_0", ThmDef {});
+    env.add_thm(Thm, "IND_SUC_INJ", ThmDef {});
+    env.add_thm(Thm, "NOT_SUC", ThmDef {});
+    env.add_thm(Thm, "SUC_INJ", ThmDef {});
+    env.add_thm(Thm, "num_CASES", ThmDef {});
+    env.add_thm(Thm, "num_INDUCTION", ThmDef {});
+    env.add_thm(Thm, "num_RECURSION", ThmDef {});
+    env.add_thm(Thm, "PRE", ThmDef {});
+    env.add_thm(Thm, "ADD", ThmDef {});
+    env.add_thm(Thm, "SUB", ThmDef {});
+    env.add_thm(Thm, "MULT1", ThmDef {});
+    env.add_thm(Thm, "EXP", ThmDef {});
+    env.add_thm(Thm, "LT", ThmDef {});
+    env.add_thm(Thm, "LE1", ThmDef {});
+    env.add_thm(Thm, "GT1", ThmDef {});
+    env.add_thm(Thm, "GE1", ThmDef {});
+    env.add_thm(Thm, "EVEN", ThmDef {});
+    env.add_thm(Thm, "ODD1", ThmDef {});
     env
   }
 }
