@@ -6,7 +6,7 @@ use std::io::Read;
 
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
-use crate::kernel::{Environment, Object, OwnedProof, OwnedTerm, OwnedType, ProofArena, TermArena, TypeArena};
+use crate::kernel::{Environment, OwnedTerm, OwnedType, ProofArena, TermArena, TypeArena, TypedefInfo};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -152,11 +152,11 @@ impl TryFrom<&str> for FetchKind {
       "BD"   => Ok(Self::BasicDef),
       "D"    => Ok(Self::Def),
       "S"    => Ok(Self::Spec),
-      "SI"   => Ok(Self::SpecInput),
-      "BZD"  => Ok(Self::BasicTypedef),
-      "BZDI" => Ok(Self::BasicTypedefInput),
+      // "SI"   => Ok(Self::SpecInput),
+      // "BZD"  => Ok(Self::BasicTypedef),
+      // "BZDI" => Ok(Self::BasicTypedefInput),
       "ZD"   => Ok(Self::Typedef),
-      "ZDI"  => Ok(Self::TypedefInput),
+      // "ZDI"  => Ok(Self::TypedefInput),
       "ZB1"  => Ok(Self::TypeBij1),
       "ZB2"  => Ok(Self::TypeBij2),
       "T"    => Ok(Self::Thm),
@@ -262,8 +262,8 @@ impl<I: Iterator<Item=u8>> Iterator for Summary<I> {
 //   Some(trans)
 // }
 
-impl TypeArena {
-  fn parse<I: Iterator<Item=u8>>(&mut self,
+impl<'a> TypeArena<'a> {
+  fn parse_type<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>, tys: &[TypeId],
   ) -> TypeId {
     #[derive(Debug)]
@@ -271,7 +271,7 @@ impl TypeArena {
       Paren,
       Fun,
       Fun1(TypeId),
-      Comp(String, Vec<TypeId>),
+      Const(TyopId, Vec<TypeId>),
     }
     #[derive(Debug)]
     enum State {
@@ -286,15 +286,15 @@ impl TypeArena {
       // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
       state = match state {
         State::Start => match tk {
-          Some(TType(i)) => { tk = lexer.next(); State::Ret(self.reuse(tys[i as usize])) }
+          Some(TType(i)) => { tk = lexer.next(); State::Ret(tys[i as usize]) }
           Some(Char('(')) => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
           Some(Ident("V")) => { tk = lexer.next();
-            parse! { lexer, tk; let x = Str(v) => v.to_owned(), }
+            parse! { lexer, tk; let x = Str(v) => self.mk_var_name(v.to_owned()), }
             State::Ret(self.mk_var(x))
           }
           Some(Ident("K")) => { tk = lexer.next();
-            parse! { lexer, tk; let x = Str(v) => v.to_owned(), }
-            stk.push(Stack::Comp(x, vec![]));
+            parse! { lexer, tk; let x = Str(v) => self.env.trans.tyops[v], }
+            stk.push(Stack::Const(x, vec![]));
             State::Start
           }
           Some(Ident("F")) => { tk = lexer.next();
@@ -302,7 +302,7 @@ impl TypeArena {
             State::Start
           }
           ref tk => match stk.pop() {
-            Some(Stack::Comp(x, args)) => State::Ret(self.mk_comp(x, args)),
+            Some(Stack::Const(x, args)) => State::Ret(self.mk_const(x, args)),
             _ => panic!("parse_type parse error: {:?}", tk)
           }
         }
@@ -318,9 +318,9 @@ impl TypeArena {
           Some(Stack::Fun1(ty1)) => {
             State::Ret(self.mk_fun(ty1, ty))
           }
-          Some(Stack::Comp(x, mut args)) => {
+          Some(Stack::Const(x, mut args)) => {
             args.push(ty);
-            stk.push(Stack::Comp(x, args));
+            stk.push(Stack::Const(x, args));
             State::Start
           }
           None => {
@@ -333,10 +333,9 @@ impl TypeArena {
     }
   }
 
-  fn parse_preamble<I: Iterator<Item=u8>>(
+  fn parse_type_preamble<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>
-  ) -> (TypeArena, Vec<TypeId>) {
-    let mut a = TypeArena::default();
+  ) -> Vec<TypeId> {
     let mut tys = vec![TypeId(u32::MAX)];
     if matches!(lexer.unpack(*ptk), Some(Token::Heading("Types"))) {
       let mut tk = lexer.next();
@@ -344,33 +343,32 @@ impl TypeArena {
       while let Some(Token::Int(v)) = tk {
         assert_eq!(v.parse::<usize>().unwrap(), tys.len());
         *ptk = lexer.next().map(Token::pack);
-        let n = a.parse(ptk, lexer, &tys);
+        let n = self.parse_type(ptk, lexer, &tys);
         tys.push(n);
         tk = lexer.unpack(*ptk);
         parse! { lexer, tk; Eols, }
       }
     }
-    (a, tys)
+    tys
   }
 
-  pub fn parse_str(&mut self, tys: &[TypeId], x: &str) -> TypeId {
+  pub fn parse_type_str(&mut self, tys: &[TypeId], x: &str) -> TypeId {
     let mut lexer = Lexer::from(x.bytes());
-    self.parse(&mut lexer.next().map(Token::pack), &mut lexer, tys)
+    self.parse_type(&mut lexer.next().map(Token::pack), &mut lexer, tys)
   }
 
-  fn parse_str_preamble(tys: &[&str]) -> (TypeArena, Vec<TypeId>) {
-    let mut a = TypeArena::default();
+  fn parse_type_str_preamble(&mut self, tys: &[&str]) -> Vec<TypeId> {
     let mut named = vec![TypeId(u32::MAX)];
     for &ty in tys {
-      let n = a.parse_str(&named, ty);
+      let n = self.parse_type_str(&named, ty);
       named.push(n);
     }
-    (a, named)
+    named
   }
 }
 
-impl TermArena {
-  fn parse<I: Iterator<Item=u8>>(&mut self,
+impl<'a> TermArena<'a> {
+  fn parse_term<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>,
     tys: &[TypeId], tms: &[TermId],
   ) -> TermId {
@@ -401,14 +399,14 @@ impl TermArena {
       // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
       state = match state {
         State::Start => match tk.unwrap() {
-          TTerm(i) => { tk = lexer.next(); State::Ret(self.reuse(tms[i as usize])) }
+          TTerm(i) => { tk = lexer.next(); State::Ret(tms[i as usize]) }
           Char('(') => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
           Ident("V") => { tk = lexer.next();
             parse! { lexer, tk; let x = Str(v) => v.to_owned(), let n = TType(v) => tys[v as usize], }
-            State::Ret(self.mk_var(x, n))
+            State::Ret(self.mk_var_term(x, n).1)
           }
           Ident("K") => { tk = lexer.next();
-            parse! { lexer, tk; let x = Str(v) => v.to_owned(), }
+            parse! { lexer, tk; let x = Str(v) => self.env.trans.consts[v], }
             let mut args = vec![];
             while let Some(TType(i)) = tk {
               tk = lexer.next();
@@ -487,7 +485,7 @@ impl TermArena {
           Some(Stack::Binop(o)) => { stk.push(Stack::Binop1(o, tm)); State::Start }
           Some(Stack::Binop1(o, tm1)) => State::Ret(match o {
             Binop::App => self.mk_app(tm1, tm),
-            Binop::Quant(q) => self.mk_quant(q, tm1, tm),
+            Binop::Quant(q) => self.mk_quant(q, self.dest_var(tm1), tm),
             Binop::Bin(b) => self.mk_bin(b, tm1, tm),
           }),
           None => {
@@ -500,25 +498,24 @@ impl TermArena {
     }
   }
 
-  pub fn parse_str(&mut self, tys: &[TypeId], tms: &[TermId], tm: &str) -> TermId {
+  pub fn parse_term_str(&mut self, tys: &[TypeId], tms: &[TermId], tm: &str) -> TermId {
     let mut lexer = Lexer::from(tm.bytes());
-    self.parse(&mut lexer.next().map(Token::pack), &mut lexer, tys, tms)
+    self.parse_term(&mut lexer.next().map(Token::pack), &mut lexer, tys, tms)
   }
 
-  fn parse_str_preamble(a: TypeArena, tys: &[TypeId], tms: &[&str]) -> (TermArena, Vec<TermId>) {
-    let mut a = Self::new(a);
+  fn parse_term_str_preamble(&mut self, tys: &[TypeId], tms: &[&str]
+  ) -> Vec<TermId> {
     let mut named = vec![TermId(u32::MAX)];
     for &tm in tms {
-      let n = a.parse_str(tys, &named, tm);
+      let n = self.parse_term_str(tys, &named, tm);
       named.push(n);
     }
-    (a, named)
+    named
   }
 
-  fn parse_preamble<I: Iterator<Item=u8>>(a: TypeArena,
+  fn parse_term_preamble<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>, tys: &[TypeId],
-  ) -> (TermArena, Vec<TermId>) {
-    let mut a = Self::new(a);
+  ) -> Vec<TermId> {
     let mut named = vec![TermId(u32::MAX)];
     if matches!(lexer.unpack(*ptk), Some(Token::Heading("Terms"))) {
       let mut tk = lexer.next();
@@ -526,19 +523,19 @@ impl TermArena {
       while let Some(Token::Int(v)) = tk {
         assert_eq!(v.parse::<usize>().unwrap(), named.len());
         *ptk = lexer.next().map(Token::pack);
-        let n = a.parse(ptk, lexer, tys, &named);
+        let n = self.parse_term(ptk, lexer, tys, &named);
         named.push(n);
         tk = lexer.unpack(*ptk);
         parse! { lexer, tk; Eols, }
       }
     }
-    (a, named)
+    named
   }
 }
 
 type Preambles = (Vec<TypeId>, Vec<TermId>, Vec<ProofId>);
 
-impl ProofArena {
+impl<'a> ProofArena<'a> {
   fn parse<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>,
     (tys, tms, fetches): &Preambles, pfs: &[ProofId],
@@ -652,7 +649,7 @@ impl ProofArena {
       state = match state {
         State::Start => match tk.unwrap() {
           Token::Fetch(i) => { next!(); State::Ret(fetches[i as usize]) }
-          Token::Subproof(i) => { next!(); State::Ret(self.reuse(pfs[i as usize])) }
+          Token::Subproof(i) => { next!(); State::Ret(pfs[i as usize]) }
           Char('(') => { next!(); stk.push(Stack::Paren); State::Start }
           Ident("AA") => { next!(); stk.push(Stack::Unary(Unary::AddAsm(term!()))); State::Start }
           Ident("AL") => { next!(); State::Ret(self.alpha(term!(), term!())) }
@@ -895,7 +892,7 @@ fn parse_term_section<I: Iterator<Item=u8>>(
   tm
 }
 
-impl ProofArena {
+impl<'a> ProofArena<'a> {
   fn parse_subproofs_section<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>, p: &Preambles,
   ) -> Vec<ProofId> {
@@ -937,8 +934,8 @@ fn parse_alphalink_section<I: Iterator<Item=u8>>(
   tm
 }
 
-impl ProofArena {
-  fn parse_fetch_preamble<I: Iterator<Item=u8>>(&mut self, env: &Environment,
+impl<'a> ProofArena<'a> {
+  fn parse_fetch_preamble<I: Iterator<Item=u8>>(&mut self,
     ptk: &mut Option<PackedToken>, lexer: &mut Lexer<I>, tys: &[TypeId],
   ) -> Vec<ProofId> {
     let mut named = vec![];
@@ -951,7 +948,7 @@ impl ProofArena {
         tk = lexer.next();
         parse! { lexer, tk; Eols,
           let k = Token::Ident(v) => FetchKind::try_from(v).unwrap(),
-          let thm = Token::Str(v) => *env.trans.fetches[k].get(v)
+          let thm = Token::Str(v) => *self.env.trans.fetches[k].get(v)
             .unwrap_or_else(|| panic!("can't find {:?} {:?}", k, v)),
         }
         let mut args = vec![];
@@ -967,22 +964,59 @@ impl ProofArena {
   }
 }
 
-fn parse_preambles<I: Iterator<Item=u8>>(env: &Environment,
-  tk: &mut Option<PackedToken>, lexer: &mut Lexer<I>,
-) -> (ProofArena, Preambles) {
-  let (a, tys) = TypeArena::parse_preamble(tk, lexer);
-  let (a, tms) = TermArena::parse_preamble(a, tk, lexer, &tys);
-  let mut a = ProofArena::new(a);
-  let fetches = a.parse_fetch_preamble(env, tk, lexer, &tys);
-  (a, (tys, tms, fetches))
+impl<'a> ProofArena<'a> {
+  fn parse_preambles<I: Iterator<Item=u8>>(&mut self,
+    tk: &mut Option<PackedToken>, lexer: &mut Lexer<I>,
+  ) -> Preambles {
+    let tys = self.parse_type_preamble(tk, lexer);
+    let tms = self.parse_term_preamble(tk, lexer, &tys);
+    let fetches = self.parse_fetch_preamble(tk, lexer, &tys);
+    (tys, tms, fetches)
+  }
 }
 
 impl Environment {
-  pub fn parse_basic_def(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) {
-    let (a, tys) = TypeArena::parse_str_preamble(tys);
-    let (mut a, tms) = TermArena::parse_str_preamble(a, &tys, tms);
-    let tm = a.parse_str(&tys, &tms, tm);
-    self.add_basic_def(x, OwnedTerm(a, tm));
+  pub fn parse_owned_type(&mut self, tys: &[&str], ty: &str) -> OwnedType {
+    OwnedType::with(self, |a| {
+      let tys = a.parse_type_str_preamble(tys);
+      a.parse_type_str(&tys, ty)
+    })
+  }
+  pub fn parse_owned_term(&mut self, tys: &[&str], tms: &[&str], tm: &str) -> OwnedTerm {
+    OwnedTerm::with(self, |a| {
+      let tys = a.parse_type_str_preamble(tys);
+      let tms = a.parse_term_str_preamble(&tys, tms);
+      a.parse_term_str(&tys, &tms, tm)
+    })
+  }
+  pub fn parse_thm_def(&mut self, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmDef {
+    ThmDef::with(self, |a| {
+      let tys = a.parse_type_str_preamble(tys);
+      let tms = a.parse_term_str_preamble(&tys, tms);
+      let hyps = hyps.iter().map(|h| a.parse_term_str(&tys, &tms, h)).collect();
+      let concl = a.parse_term_str(&tys, &tms, concl);
+      a.axiom(hyps, concl)
+    })
+  }
+  pub fn parse_typedef_info(&mut self, tys: &[&str], tms: &[&str], concl: &str) -> TypedefInfo {
+    ThmDef::with_typedef_info(self, |a| {
+      let tys = a.parse_type_str_preamble(tys);
+      let tms = a.parse_term_str_preamble(&tys, tms);
+      let concl = a.parse_term_str(&tys, &tms, concl);
+      a.axiom(vec![], concl)
+    })
+  }
+  pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
+    let ty = self.parse_owned_type(tys, ty);
+    self.add_const(x, ty)
+  }
+  pub fn parse_basic_def(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> (ConstId, ThmId) {
+    let tm = self.parse_owned_term(tys, tms, tm);
+    self.add_basic_def(x, tm)
+  }
+  pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
+    let tm = self.parse_typedef_info(tys, tms, tm);
+    self.add_basic_typedef(x, tm)
   }
 }
 
@@ -1033,70 +1067,91 @@ impl Importer {
       parse! { lexer, tk; Heading(""), Eols, }
     }
     let mut tk = tk.map(Token::pack);
-    let obj = match kind {
+    match kind {
       ObjectSpec::TypeDecl(x) => {
-        Object::TypeDecl(x, parse_int_section(&mut tk, &mut lexer))
+        let arity = parse_int_section(&mut tk, &mut lexer);
+        self.env.add_tyop(x, arity, None);
       }
       ObjectSpec::ConstDecl(x) => {
-        let (a, tys) = TypeArena::parse_preamble(&mut tk, &mut lexer);
-        let ty = parse_type_section(&mut tk, &mut lexer, &tys);
-        Object::ConstDecl(x, OwnedType(a, ty))
+        let ty = OwnedType::with(&self.env, |a| {
+          let tys = a.parse_type_preamble(&mut tk, &mut lexer);
+          parse_type_section(&mut tk, &mut lexer, &tys)
+        });
+        self.env.add_const(x, ty);
       }
       ObjectSpec::Axiom(x) => {
-        let (a, tys) = TypeArena::parse_preamble(&mut tk, &mut lexer);
-        let (a, tms) = TermArena::parse_preamble(a, &mut tk, &mut lexer, &tys);
-        let tm = parse_term_section(&mut tk, &mut lexer, &tms);
-        Object::Axiom(x, OwnedTerm(a, tm))
+        let tm = OwnedTerm::with(&self.env, |a| {
+          let tys = a.parse_type_preamble(&mut tk, &mut lexer);
+          let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
+          parse_term_section(&mut tk, &mut lexer, &tms)
+        });
+        self.env.add_axiom(x, tm);
       }
       ObjectSpec::BasicDef(x) => {
-        let (a, tys) = TypeArena::parse_preamble(&mut tk, &mut lexer);
-        let (a, tms) = TermArena::parse_preamble(a, &mut tk, &mut lexer, &tys);
-        let tm = parse_term_section(&mut tk, &mut lexer, &tms);
-        Object::BasicDef(x, OwnedTerm(a, tm))
+        let tm = OwnedTerm::with(&self.env, |a| {
+          let tys = a.parse_type_preamble(&mut tk, &mut lexer);
+          let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
+          parse_term_section(&mut tk, &mut lexer, &tms)
+        });
+        self.env.add_basic_def(x, tm);
       }
       ObjectSpec::Def(x) => {
-        let (a, tys) = TypeArena::parse_preamble(&mut tk, &mut lexer);
-        let (a, tms) = TermArena::parse_preamble(a, &mut tk, &mut lexer, &tys);
-        let tm = parse_term_section(&mut tk, &mut lexer, &tms);
-        Object::Def(x, OwnedTerm(a, tm))
+        let tm = OwnedTerm::with(&self.env, |a| {
+          let tys = a.parse_type_preamble(&mut tk, &mut lexer);
+          let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
+          parse_term_section(&mut tk, &mut lexer, &tms)
+        });
+        self.env.add_def(x);
       }
       ObjectSpec::Spec(xs) => {
-        let (mut a, p) = parse_preambles(&self.env, &mut tk, &mut lexer);
-        let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
-        let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-        Object::Spec(xs, OwnedProof(a, pr))
+        let pr = ThmDef::with(&self.env, |a| {
+          let p = a.parse_preambles(&mut tk, &mut lexer);
+          let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
+          a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
+        });
+        self.env.add_spec(Vec::from(xs))
       }
       ObjectSpec::BasicTypedef(x) => {
-        let (mut a, p) = parse_preambles(&self.env, &mut tk, &mut lexer);
-        let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
-        let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-        Object::BasicTypedef(x, OwnedProof(a, pr))
+        let pr = ThmDef::with_typedef_info(&self.env, |a| {
+          let p = a.parse_preambles(&mut tk, &mut lexer);
+          let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
+          a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
+        });
+        self.env.add_basic_typedef(x, pr);
       }
       ObjectSpec::Typedef(_) => unimplemented!(),
-      ObjectSpec::TypeBij(xs) => Object::TypeBij(*xs),
+      ObjectSpec::TypeBij(xs) => {
+        let [x, x1, x2] = *xs;
+        let c = self.env.trans.tyops[&x];
+        self.env.add_type_bijs(c, &x, x1, x2);
+      }
       ObjectSpec::Thm(x) => {
-        let (mut a, p) = parse_preambles(&self.env, &mut tk, &mut lexer);
-        let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
-        let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-        let pr = a.alpha_link(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1));
-        Object::Thm(x, OwnedProof(a, pr))
+        let pr = ThmDef::with(&self.env, |a| {
+          let p = a.parse_preambles(&mut tk, &mut lexer);
+          let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
+          let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
+          a.alpha_link(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1))
+        });
+        self.env.add_thm(FetchKind::Thm, x, ThmDef::default());
       }
       ObjectSpec::OpenThm(x) => {
-        let (mut a, p) = parse_preambles(&self.env, &mut tk, &mut lexer);
-        let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
-        let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-        Object::OpenThm(x, OwnedProof(a, pr))
+        let pr = ThmDef::with(&self.env, |a| {
+          let p = a.parse_preambles(&mut tk, &mut lexer);
+          let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
+          a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
+        });
+        self.env.add_thm(FetchKind::OThm, x, ThmDef::default());
       }
       ObjectSpec::NumThm(x) => {
-        let (mut a, p) = parse_preambles(&self.env, &mut tk, &mut lexer);
-        let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
-        let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-        Object::NumThm(x, OwnedProof(a, pr))
+        let pr = ThmDef::with(&self.env, |a| {
+          let p = a.parse_preambles(&mut tk, &mut lexer);
+          let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
+          a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
+        });
+        self.env.add_thm(FetchKind::NThm, x.to_string(), ThmDef::default());
       }
     };
     assert!(matches!(tk, None));
-    // println!("{:?}", obj);
-    self.env.add(obj);
     true
   }
 }

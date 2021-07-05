@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Index, IndexMut};
-use num_bigint::BigUint;
+
+use crate::kernel::{OwnedType, TermArena, TermStore, TypeStore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectSpec {
@@ -26,13 +27,13 @@ pub enum FetchKind {
   OThm,
   NThm,
   BasicDef,
-  BasicTypedef,
-  BasicTypedefInput,
+  // BasicTypedef,
+  // BasicTypedefInput,
   Typedef,
-  TypedefInput,
+  // TypedefInput,
   Def,
   Spec,
-  SpecInput,
+  // SpecInput,
   TypeBij1,
   TypeBij2,
 }
@@ -61,20 +62,24 @@ pub struct ObjectData {
 pub trait Idx: Copy {
   fn from(_: u32) -> Self;
   fn into_u32(self) -> u32;
+  fn into_usize(self) -> usize { self.into_u32() as usize }
 }
 
 macro_rules! idx {($($ty:ident),*) => {
   $(
-    #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+    #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
     pub struct $ty(pub u32);
     impl Idx for $ty {
       fn from(n: u32) -> Self { Self(n) }
       fn into_u32(self) -> u32 { self.0 }
     }
+    impl Default for $ty {
+      fn default() -> $ty { $ty(u32::MAX) }
+    }
   )*
 }}
 
-idx! { TyopId, ConstId, ThmId, TypeId, TermId, ProofId }
+idx! { TyopId, ConstId, ThmId, TyVarId, TypeId, VarId, TermId, HypsId, ProofId }
 
 #[derive(Default, Debug)]
 pub struct TransTable {
@@ -92,7 +97,7 @@ impl TransTable {
       ObjectSpec::BasicDef(x) => self.fetches[FetchKind::BasicDef].contains_key(x),
       ObjectSpec::Def(x) => self.fetches[FetchKind::Def].contains_key(x),
       ObjectSpec::Spec(xs) => xs.iter().any(|x| self.fetches[FetchKind::Spec].contains_key(x)),
-      ObjectSpec::BasicTypedef(x) => self.fetches[FetchKind::BasicTypedef].contains_key(x),
+      ObjectSpec::BasicTypedef(x) => false, //self.fetches[FetchKind::BasicTypedef].contains_key(x),
       ObjectSpec::Typedef(x) => self.fetches[FetchKind::Typedef].contains_key(x),
       ObjectSpec::TypeBij(x) => self.fetches[FetchKind::TypeBij1].contains_key(&x[0]),
       ObjectSpec::Thm(x) => self.fetches[FetchKind::Thm].contains_key(x),
@@ -104,9 +109,8 @@ impl TransTable {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Type {
-  Var(String),
-  Fun(TypeId, TypeId),
-  Comp(String, Vec<TypeId>),
+  Var(TyVarId),
+  Const(TyopId, Vec<TypeId>),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -147,26 +151,40 @@ pub enum Quant {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Term {
-  Var(String, TypeId),
-  OConst(String, Vec<TypeId>),
-  BigInt(BigUint),
+  Var(VarId),
+  Const(ConstId, Vec<TypeId>),
   App(TermId, TermId),
-  Quant(Quant, TermId, TermId),
-  Binary(Binary, TermId, TermId),
-  Not(TermId),
+  Lam(VarId, TermId),
+}
+
+// All of these IDs use the proof store in the theorem referenced by `exists_p`
+#[derive(Debug)]
+pub struct TydefData {
+  // Base type `A`
+  pub ty: TypeId,
+  // Term `P: A -> bool`
+  pub p: TermId,
+  // Proof of `? x. P x`
+  pub exists_p: ThmId,
 }
 
 #[derive(Debug)]
 pub struct TyopDef {
-  pub arity: u32
+  pub arity: u32,
+  pub tydef: Option<TydefData>,
 }
 
 #[derive(Debug)]
+#[derive(Default)] // FIXME
 pub struct ConstDef {
-
+  pub ty: OwnedType,
 }
 
 #[derive(Debug)]
+#[derive(Default)] // FIXME
 pub struct ThmDef {
-
+  pub arena: TermStore,
+  pub tyvars: u32,
+  pub hyps: Box<[TermId]>,
+  pub concl: TermId,
 }

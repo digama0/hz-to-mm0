@@ -1,3 +1,4 @@
+#![allow(unused)]
 mod lexer;
 mod parser;
 mod kernel;
@@ -48,6 +49,5 @@ fn main() {
   }
   let mut types: Vec<_> = importer.env.counts.into_iter().collect();
   types.sort_by(|a, b| a.1.cmp(&b.1));
-  println!("{} objects", importer.env.objects);
   println!("{:?}", types)
 }
