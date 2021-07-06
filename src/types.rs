@@ -175,7 +175,6 @@ pub struct TyopDef {
 }
 
 #[derive(Debug)]
-#[derive(Default)] // FIXME
 pub struct ConstDef {
   pub ty: OwnedType,
 }
