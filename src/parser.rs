@@ -1,6 +1,6 @@
 #![allow(clippy::eval_order_dependence)]
 
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 use std::io::Read;
 
@@ -394,82 +394,44 @@ impl<'a> TermArena<'a> {
     let mut stk = vec![];
     let mut tk = lexer.unpack(*ptk);
     use Token::{Char, Ident, Str, Int, Type as TType, Term as TTerm};
+    macro_rules! next {() => {tk = lexer.next()}}
     let mut state = State::Start;
     loop {
       // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
       state = match state {
         State::Start => match tk.unwrap() {
-          TTerm(i) => { tk = lexer.next(); State::Ret(tms[i as usize]) }
-          Char('(') => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
-          Ident("V") => { tk = lexer.next();
+          TTerm(i) => { next!(); State::Ret(tms[i as usize]) }
+          Char('(') => { next!(); stk.push(Stack::Paren); State::Start }
+          Ident("V") => { next!();
             parse! { lexer, tk; let x = Str(v) => v.to_owned(), let n = TType(v) => tys[v as usize], }
             State::Ret(self.mk_var_term(x, n).1)
           }
-          Ident("K") => { tk = lexer.next();
+          Ident("K") => { next!();
             parse! { lexer, tk; let x = Str(v) => self.env.trans.consts[v], }
             let mut args = vec![];
             while let Some(TType(i)) = tk {
-              tk = lexer.next();
+              next!();
               args.push(tys[i as usize])
             }
             State::Ret(self.mk_const(x, args))
           }
-          Ident("M") => { tk = lexer.next();
+          Ident("M") => { next!();
             parse! { lexer, tk; let n = Int(v) => v.parse().unwrap(), }
             State::Ret(self.mk_int(n))
           }
-          Ident("A") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::App));
-            State::Start
-          }
-          Ident("L") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Quant(Quant::Lambda)));
-            State::Start
-          }
-          Ident("B") => { tk = lexer.next();
-            stk.push(Stack::Bin0);
-            State::Start
-          }
-          Ident("E") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Bin(Binary::Eq)));
-            State::Start
-          }
-          Ident("N") => { tk = lexer.next();
-            stk.push(Stack::Not);
-            State::Start
-          }
-          Ident("C") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Bin(Binary::Conj)));
-            State::Start
-          }
-          Ident("D") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Bin(Binary::Disj)));
-            State::Start
-          }
-          Ident("I") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Bin(Binary::Imp)));
-            State::Start
-          }
-          Ident("P") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Bin(Binary::Pair)));
-            State::Start
-          }
-          Ident("X") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Quant(Quant::Exists)));
-            State::Start
-          }
-          Ident("UX") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Quant(Quant::UExists)));
-            State::Start
-          }
-          Ident("U") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Quant(Quant::Forall)));
-            State::Start
-          }
-          Ident("S") => { tk = lexer.next();
-            stk.push(Stack::Binop(Binop::Quant(Quant::Select)));
-            State::Start
-          }
+          Ident("A") => { next!(); stk.push(Stack::Binop(Binop::App)); State::Start }
+          Ident("L") => { next!(); stk.push(Stack::Binop(Binop::Quant(Quant::Lambda))); State::Start }
+          Ident("B") => { next!(); stk.push(Stack::Bin0); State::Start }
+          Ident("E") => { next!(); stk.push(Stack::Binop(Binop::Bin(Binary::Eq))); State::Start }
+          Ident("N") => { next!(); stk.push(Stack::Not); State::Start }
+          Ident("C") => { next!(); stk.push(Stack::Binop(Binop::Bin(Binary::Conj))); State::Start }
+          Ident("D") => { next!(); stk.push(Stack::Binop(Binop::Bin(Binary::Disj))); State::Start }
+          Ident("I") => { next!(); stk.push(Stack::Binop(Binop::Bin(Binary::Imp))); State::Start }
+          Ident("P") => { next!(); stk.push(Stack::Binop(Binop::Bin(Binary::Pair))); State::Start }
+          Ident("X") => { next!(); stk.push(Stack::Binop(Binop::Quant(Quant::Exists))); State::Start }
+          Ident("UX") => { next!(); stk.push(Stack::Binop(Binop::Quant(Quant::UExists))); State::Start }
+          Ident("U") => { next!(); stk.push(Stack::Binop(Binop::Quant(Quant::Forall))); State::Start }
+          Ident("S") => { next!(); stk.push(Stack::Binop(Binop::Quant(Quant::Select))); State::Start }
           ref tk => panic!("parse_term parse error: {:?}", tk)
         }
         State::Ret(tm) => match stk.pop() {
@@ -1014,9 +976,22 @@ impl Environment {
     let tm = self.parse_owned_term(tys, tms, tm);
     self.add_basic_def(x, tm)
   }
+  pub fn parse_def(&mut self, x: &str, arity: u32, tys: &[&str], tms: &[&str], tm: &str) -> (ConstId, ThmId) {
+    let tm = self.parse_owned_term(tys, tms, tm);
+    self.add_basic_def(x, tm)
+  }
   pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
     let tm = self.parse_typedef_info(tys, tms, tm);
     self.add_basic_typedef(x, tm)
+  }
+  pub fn parse_thm(&mut self, k: FetchKind,
+    x: &str, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmId {
+    let th = self.parse_thm_def(tys, tms, hyps, concl);
+    self.add_thm(k, x, th)
+  }
+  pub fn parse_spec<const N: usize>(&mut self,
+    xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str) -> [ThmId; N] {
+    xs.iter().map(|&x| todo!()).collect::<Vec<_>>().try_into().unwrap()
   }
 }
 

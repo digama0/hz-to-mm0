@@ -1,7 +1,7 @@
 #![allow(unused)]
 mod lexer;
 mod parser;
-mod kernel;
+pub mod kernel;
 mod corethy;
 mod types;
 

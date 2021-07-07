@@ -1,5 +1,5 @@
 use crate::kernel::Environment;
-use crate::types::{ConstId, FetchKind, ThmDef, TyopId};
+use crate::types::{ConstId, FetchKind, TyopId};
 
 impl TyopId {
   pub const BOOL: Self = Self(0);
@@ -32,6 +32,7 @@ impl Environment {
     assert_eq!(TyopId::BOOL, env.add_tyop("bool", 0, None));
     assert_eq!(TyopId::FUN, env.add_tyop("fun", 2, None));
     let bool_ty = "K \"bool\"";
+    let ind_ty = "K \"ind\"";
     let num_ty = "K \"num\"";
     let p_tm = "V \"p\" z1";
     let q_tm = "V \"q\" z1";
@@ -41,13 +42,14 @@ impl Environment {
     let vx = "V \"x\" z1";
     let vy = "V \"y\" z2";
     let vn = "V \"n\" z1";
+    let suc = "K \"SUC\"";
     env.parse_const("=", &[a_ty], "F z1 (F z1 (K \"bool\"))");
     // T = ((\p:bool. p) = (\p:bool. p))
     env.parse_basic_def("T", &[bool_ty], &[p_tm, "L t1 t1"], "E t2 t2");
     // (/\) = \p q. (\f:bool->bool->bool. f p q) = (\f. f T T)
     env.parse_basic_def("/\\", &[bool_ty, "F z1 (F z1 z1)"],
       &[p_tm, q_tm, "V \"f\" z2", "K \"T\""],
-      "L t1 (L t2 (E (L t3 (A (A t3 t1) t2)) (L t3 (A (A t3 t4) t4))))");
+      "L t1 (L t2 (E (L t3 (B t3 t1 t2)) (L t3 (B t3 t4 t4))))");
     // (==>) = \p q. p /\ q <=> p
     env.parse_basic_def("==>", &[bool_ty], &[p_tm, q_tm], "L t1 (L t2 (E (C t1 t2) t1))");
     // (!) = \P:A->bool. P = \x. T
@@ -68,9 +70,14 @@ impl Environment {
     env.parse_basic_def("?!", &[a_ty, "F z1 (K \"bool\")"],
       &["V \"P\" z2", vx, "V \"y\" z1"],
       r#"L t1 (C (A (K "?" z1) t1) (U t2 (U t3 (I (C (A t1 t2) (A t1 t3)) (E t2 t3)))))"#);
-    env.add_thm(Axiom, "ETA_AX", ThmDef::default());
+    // !t:A->B. (\x. t x) = t
+    env.parse_thm(Axiom, "ETA_AX", &[a_ty, b_ty, "F z1 z2"], &["V \"t\" z3", "V \"x\" z1"],
+      &[], "U t1 (E (L t2 (A t1 t2)) t1)");
     env.parse_const("@", &[a_ty], "F (F z1 (K \"bool\")) z1");
-    env.add_thm(Axiom, "SELECT_AX", ThmDef::default());
+    // !P (x:A). P x ==> P ((@) P)
+    env.parse_thm(Axiom, "SELECT_AX", &[a_ty, bool_ty, "F z1 z2"],
+      &["V \"P\" z3", "V \"x\" z1"],
+      &[], "U t1 (U t2 (I (A t1 t2) (A t1 (A (K \"@\" z1) t1))))");
     // COND = \t t1 t2. @x:A. ((t <=> T) ==> (x = t1)) /\ ((t <=> F) ==> (x = t2))
     env.parse_basic_def("COND", &[bool_ty, a_ty],
       &["V \"t\" z1", "V \"t1\" z2", "V \"t2\" z2", "V \"x\" z2",
@@ -92,96 +99,186 @@ impl Environment {
     env.parse_basic_def("SND", &[a_ty, b_ty, "K \"prod\" z1 z2"], &["V \"p\" z3", vx, vy],
       "L t1 (S t3 (X t2 (E t1 (P t2 t3))))");
     env.add_tyop("ind", 0, None);
-    // env.parse_def("ONE_ONE", "!f. ONE_ONE f <=> (!x1 x2. f x1 = f x2 ==> x1 = x2)");
     // ONE_ONE = \f:A->B. !x1 x2. (f x1 = f x2) ==> (x1 = x2)
-    env.parse_basic_def("ONE_ONE", &[a_ty, b_ty, "F z1 z2"],
+    env.parse_def("ONE_ONE", 1, &[a_ty, b_ty, "F z1 z2"],
       &["V \"x1\" z1", "V \"x2\" z1", "V \"f\" z3"],
       "L t3 (U t1 (U t2 (I (E (A t3 t1) (A t3 t2)) (E t1 t2))))");
-    // env.parse_def("ONTO", "!f. ONTO f <=> (!y. ?x. y = f x)");
     // ONTO = \f:A->B. !y. ?x. y = f x
-    env.parse_basic_def("ONTO", &[a_ty, b_ty, "F z1 z2"],
+    env.parse_def("ONTO", 1, &[a_ty, b_ty, "F z1 z2"],
       &[vx, vy, "V \"f\" z3"],
       "L t3 (U t2 (X t1 (E t2 (A t3 t1))))");
-    env.add_thm(Axiom, "INFINITY_AX", ThmDef::default());
-    // env.parse_def("IND_SUC",
-    //   "IND_SUC = (@f. ?z. (!x1 x2. f x1 = f x2 <=> x1 = x2) /\ (!x. ~(f x = z)))");
-    env.parse_const("IND_SUC", &["K \"ind\""], "F z1 z1");
-    // env.parse_def("IND_0",
-    //   "IND_0 = (@z. (!x1 x2. IND_SUC x1 = IND_SUC x2 <=> x1 = x2) /\ (!x. ~(IND_SUC x = z)))");
-    env.parse_const("IND_0", &[], "K \"ind\"");
+    // ?f:ind->ind. ONE_ONE f /\ ~ONTO f
+    env.parse_thm(Axiom, "INFINITY_AX", &[ind_ty, "F z1 z1"], &["V \"f\" z2"],
+      &[], "E t1 (C (A (K \"ONE_ONE\" z1 z1) t1) (N (A (K \"ONTO\" z1 z1) t1)))");
+    // IND_SUC = (@f. ?z. (!x1 x2. f x1 = f x2 <=> x1 = x2) /\ (!x. ~(f x = z)))
+    env.parse_def("IND_SUC", 0, &[ind_ty, "F z1 z1"],
+      &["V \"z\" z1", "V \"x1\" z1", "V \"x2\" z1", "V \"x\" z1", "V \"f\" z2",
+        "U t2 (U t3 (E (E (A t5 t2) (A t5 t3)) (E t2 t3)))"],
+      "S t5 (X t1 (C t6 (U t4 (N (E (A t5 t4) t1)))))");
+    // IND_0 = (@z. (!x1 x2. IND_SUC x1 = IND_SUC x2 <=> x1 = x2) /\ (!x. ~(IND_SUC x = z)))
+    env.parse_def("IND_0", 0, &[ind_ty],
+      &["V \"z\" z1", "V \"x1\" z1", "V \"x2\" z1", "V \"x\" z1", "K \"IND_SUC\"",
+        "U t2 (U t3 (E (E (A t5 t2) (A t5 t3)) (E t2 t3)))"],
+      "S t1 (C t6 (U t4 (N (E (A t5 t4) t1))))");
     // NUM_REP = \k. !P. P IND_0 /\ (!j. P j ==> P (IND_SUC j)) ==> P i
-    env.parse_basic_def("NUM_REP", &["K \"ind\"", "F z1 (K \"bool\")"],
+    env.parse_basic_def("NUM_REP", &[ind_ty, "F z1 (K \"bool\")"],
       &["V \"k\" z1", "V \"P\" z2", "V \"j\" z1", "V \"i\" z1",
         r#"(D (E t3 (K "IND_0")) (X t4 (C (E t3 (A (K "IND_SUC") t4)) (A t2 t4))))"#],
       "L t1 (U t2 (I (U t3 (I t5 (A t2 t3))) (A t2 t1)))");
     // num = basic_typedef [?k:ind. NUM_REP k]
-    let num = env.parse_basic_typedef("num", &["K \"ind\""], &["V \"k\" z1"],
+    let num = env.parse_basic_typedef("num", &[ind_ty], &["V \"k\" z1"],
       "E t1 (A (K \"NUM_REP\") t1)");
     env.add_type_bijs(num, "num", "mk_num", "dest_num");
-    // env.parse_def("_0", "mk_num IND_0");
     // _0 = mk_num IND_0
-    assert_eq!(ConstId::ZERO,
-      env.parse_basic_def("_0", &[], &[], "A (K \"mk_num\") (K \"IND_0\")").0);
-    // env.parse_def("SUC", "!n. SUC n = mk_num (IND_SUC (dest_num n))");
-    // SUC = \n. mk_num (IND_SUC (dest_num n))
-    env.parse_basic_def("SUC", &[num_ty], &[vn],
+    assert_eq!(ConstId::ZERO, env.parse_def("_0", 0,
+      &[], &[], "A (K \"mk_num\") (K \"IND_0\")").0);
+    // !n. SUC n = mk_num (IND_SUC (dest_num n))
+    env.parse_def("SUC", 1, &[num_ty], &[vn],
       r#"L t1 (A (K "mk_num") (A (K "IND_SUC") (A (K "dest_num") t1)))"#);
-    // env.parse_def("NUMERAL", "!n. NUMERAL n = n");
-    // NUMERAL = \n:num. n
-    assert_eq!(ConstId::NUMERAL, env.parse_basic_def("NUMERAL",
-      &[num_ty], &[vn], "L t1 t1").0);
-    // env.parse_def("BIT0", "BIT0 = (@fn. fn 0 = 0 /\ (!n. fn (SUC n) = SUC (SUC (fn n))))");
-    // BIT0 = @fn. fn 0 = 0 /\ (!n. fn (SUC n) = SUC (SUC(fn n)))
-    assert_eq!(ConstId::BIT0, env.parse_basic_def("BIT0",
-      &[num_ty, "F z1 z1"], &["V \"fn\" z2", vn, "K \"SUC\"", "M 0"],
+    // !n. NUMERAL n = n
+    assert_eq!(ConstId::NUMERAL, env.parse_def("NUMERAL", 1, &[num_ty], &[vn], "L t1 t1").0);
+    // BIT0 = @fn. fn 0 = 0 /\ (!n. fn (SUC n) = SUC (SUC (fn n)))
+    assert_eq!(ConstId::BIT0, env.parse_def("BIT0", 0,
+      &[num_ty, "F z1 z1"], &["V \"fn\" z2", vn, suc, "M 0"],
       "S t1 (C (E (A t1 t4) t4) (U t2 (E (A t1 (A t3 t2)) (A t3 (A t3 (A t1 t2))))))").0);
-    // env.parse_def("BIT1", "!n. BIT1 n = SUC (BIT0 n)");
-    // BIT1 = \n. SUC (BIT0 n)
-    assert_eq!(ConstId::BIT1, env.parse_basic_def("BIT1",
+    // !n. BIT1 n = SUC (BIT0 n)
+    assert_eq!(ConstId::BIT1, env.parse_def("BIT1", 1,
       &[num_ty], &[vn], "L t1 (A (K \"SUC\") (A (K \"BIT0\") t1))").0);
-    // env.add_spec("PRE", "PRE 0 = 0 /\ (!n. PRE (SUC n) = n))");
-    // env.add_spec("+", "(!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))");
-    // env.add_spec("*", "(!n. 0 * n = 0) /\ (!m n. SUC m * n = m * n + n)");
-    // env.add_spec("EXP", "(!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)");
-    // env.add_spec("<=", "(!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)");
-    // env.add_spec("<", "(!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)");
-    // env.add_def(">=", "!m n. m >= n <=> n <= m");
-    // env.add_def(">", "!m n. m > n <=> n < m");
-    // env.add_spec("EVEN", "(EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)");
-    // env.add_spec("ODD", "(ODD 0 <=> F) /\ (!n. ODD (SUC n) <=> ~ODD n)");
-    // env.add_spec("-", "(!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))");
-    // env.parse_basic_def("TYPE_DEFINITION",
-    //   "(\P rep. ONE_ONE rep /\ (!x. P x <=> (?y. x = rep y)))");
-    // env.add_thm(Thm, "AND_DEF1", "(/\) = (\p q. !t. (p ==> q ==> t) ==> t)");
-    // env.add_thm(Thm, "EXISTS_THM", "(?) = (\P. P ((@) P))");
-    // env.add_thm(Thm, "EXISTS_UNIQUE_DEF1", "(?!) = (\P. ?t. P t /\ (!x. P x ==> x = t))");
-    // env.add_thm(Thm, "IMP_ANTISYM_AX", "!t1 t2. (t1 ==> t2) ==> (t2 ==> t1) ==> (t1 <=> t2)");
-    // env.add_thm(Thm, "BOOL_CASES_AX", "!t. (t <=> T) \/ (t <=> F)");
-    // env.add_thm(Thm, "TRUTH", "T");
-    // env.add_thm(Thm, "NOT_TRUE", "~T <=> F");
-    // env.add_thm(Thm, "EXCLUDED_MIDDLE", "!t. t \/ ~t");
-    // env.add_thm(Thm, "PAIR_EQ", "!x y a b. x,y = a,b <=> x = a /\ y = b");
-    // env.add_thm(Thm, "PAIR_SURJECTIVE", "!p. ?x y. p = x,y");
-    // env.add_thm(Thm, "FST", "!x y. FST (x,y) = x");
-    // env.add_thm(Thm, "SND", "!x y. SND (x,y) = y");
-    // env.add_thm(Thm, "IND_SUC_0", "!x. ~(IND_SUC x = IND_0)");
-    // env.add_thm(Thm, "IND_SUC_INJ", "!x1 x2. IND_SUC x1 = IND_SUC x2 <=> x1 = x2");
-    // env.add_thm(Thm, "NOT_SUC", "!n. ~(SUC n = 0)");
-    // env.add_thm(Thm, "SUC_INJ", "!m n. SUC m = SUC n <=> m = n");
-    // env.add_thm(Thm, "num_CASES", "!m. m = 0 \/ (?n. m = SUC n)");
-    // env.add_thm(Thm, "num_INDUCTION", "!P. P 0 /\ (!n. P n ==> P (SUC n)) ==> (!n. P n)");
-    // env.add_thm(Thm, "num_RECURSION", "!e f. ?fn. fn 0 = e /\ (!n. fn (SUC n) = f (fn n) n)");
-    // env.add_thm(Thm, "PRE", "PRE 0 = 0 /\ (!n. PRE (SUC n) = n)");
-    // env.add_thm(Thm, "ADD", "(!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))");
-    // env.add_thm(Thm, "SUB", "(!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))");
-    // env.add_thm(Thm, "MULT1", "(!n. 0 * n = 0) /\ (!m n. SUC m * n = n + m * n)");
-    // env.add_thm(Thm, "EXP", "(!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)");
-    // env.add_thm(Thm, "LT", "(!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)");
-    // env.add_thm(Thm, "LE1", "!m n. m <= n <=> m < n \/ m = n");
-    // env.add_thm(Thm, "GT1", "!m n. m > n <=> n < m");
-    // env.add_thm(Thm, "GE1", "!m n. m >= n <=> n <= m");
-    // env.add_thm(Thm, "EVEN", "(EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)");
-    // env.add_thm(Thm, "ODD1", "!n. ODD n <=> ~EVEN n");
+    // PRE 0 = 0 /\ (!n. PRE (SUC n) = n))
+    let [pre] = env.parse_spec(&["PRE"], &[num_ty], &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
+      "S t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
+    // (!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))
+    let [add] = env.parse_spec(&["+"], &[num_ty, "F z1 (F z1 z1)"],
+      &["V \"+\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      "S t1 (C (U t5 (E (B t1 t2 t5) t5)) \
+               (U t4 (U t5 (E (B t1 (A t3 t4) t5) (A t3 (B t1 t4 t5))))))");
+    // (!n. 0 * n = 0) /\ (!m n. SUC m * n = m * n + n)
+    let [_] = env.parse_spec(&["*"], &[num_ty, "F z1 (F z1 z1)"],
+      &["V \"*\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      "S t1 (C (U t5 (E (B t1 t2 t5) t2)) \
+               (U t4 (U t5 (E (B t1 (A t3 t4) t5) (B (K \"+\") (B t1 t4 t5) t5)))))");
+    // (!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)
+    let [exp] = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
+      &["V \"EXP\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      "S t1 (C (U t4 (E (B t1 t2 t4) (M 1))) \
+               (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (B (K \"*\") t4 (B t1 t4 t5))))))");
+    // (!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)
+    let [_] = env.parse_spec(&["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+      &["V \"<=\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      "S t1 (C (U t4 (E (B t1 t4 t2) (E t4 t2))) \
+               (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 (A t3 t4)) (B t1 t4 t5))))))");
+    // (!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)
+    let [lt] = env.parse_spec(&["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+      &["V \"<\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      "S t1 (C (U t4 (E (B t1 t4 t2) (K \"F\"))) \
+               (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 t5) (B t1 t4 t5))))))");
+    // !m n. m >= n <=> n <= m
+    env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      "L t1 (L t2 (B (K \"<=\") t2 t1))");
+    // !m n. m > n <=> n < m
+    env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      "L t1 (L t2 (B (K \"<\") t2 t1))");
+    // (EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)
+    let [even] = env.parse_spec(&["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
+      &["V \"EVEN\" z2", "M 0", suc, "V \"n\" z1"],
+      "S t1 (C (E (A t1 t2) (K \"T\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+    // (ODD 0 <=> F) /\ (!n. ODD (SUC n) <=> ~ODD n)
+    let [_] = env.parse_spec(&["ODD"], &[num_ty, "F z1 (K \"bool\")"],
+      &["V \"ODD\" z2", "M 0", suc, "V \"n\" z1"],
+      "S t1 (C (E (A t1 t2) (K \"F\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+    // (!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))
+    let [sub] = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
+      &["V \"-\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1", "K \"PRE\""],
+      "S t1 (C (U t4 (E (B t1 t2 t4) t2)) \
+               (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (A t6 (B t1 t4 t5))))))");
+    // TYPE_DEFINITION = \(P:A->bool) (rep:B->A). ONE_ONE rep /\ (!x:A. P x <=> (?y:B. x = rep y))
+    env.parse_basic_def("TYPE_DEFINITION", &[a_ty, b_ty, bool_ty, "F z1 z3", "F z2 z1"],
+      &["V \"P\" z4", "V \"rep\" z5", "V \"x\" z1", "V \"y\" z2"],
+      "L t1 (L t2 (C (A (K \"ONE_ONE\" z2 z1) t2) (U t3 (E (A t1 t3) (X t4 (E t3 (A t2 t4)))))))");
+    // (/\) = (\p q. !t. (p ==> q ==> t) ==> t)
+    env.parse_thm(Thm, "AND_DEF1", &[bool_ty], &["V \"p\" z1", "V \"q\" z1", "V \"t\" z1"],
+      &[], r#"E (K "/\\") (L t1 (L t2 (U t3 (I (I t1 (I t2 t3)) t3))))"#);
+    // (?) = (\P:A->bool. P ((@) P))
+    env.parse_thm(Thm, "EXISTS_THM", &[a_ty, bool_ty, "F z1 z2"],
+      &["V \"P\" z3"],
+      &[], "E (K \"?\" z1) (L t1 (A t1 (A (K \"@\" z1) t1)))");
+    // (?!) = (\P. ?t. P t /\ (!x. P x ==> x = t))
+    env.parse_thm(Thm, "EXISTS_UNIQUE_DEF1", &[a_ty, bool_ty, "F z1 z2"],
+      &["V \"P\" z3", "V \"t\" z1", "V \"x\" z1"],
+      &[], "E (K \"?!\" z1) (L t1 (X t2 (C (A t1 t2) (U t3 (I (A t1 t3) (E t3 t2))))))");
+    // !t1 t2. (t1 ==> t2) ==> (t2 ==> t1) ==> (t1 <=> t2)
+    env.parse_thm(Thm, "IMP_ANTISYM_AX", &[bool_ty], &["V \"t1\" z1", "V \"t2\" z1"],
+      &[], "U t1 (U t2 (I (I t1 t2) (I (I t2 t1) (E t1 t2))))");
+    // !t. (t <=> T) \/ (t <=> F)
+    env.parse_thm(Thm, "BOOL_CASES_AX", &[bool_ty], &["V \"t\" z1"],
+      &[], r#"U t1 (D (E t1 (K "T")) (E t1 (K "F")))"#);
+    // T
+    env.parse_thm(Thm, "TRUTH", &[], &[], &[], "K \"T\"");
+    // ~T <=> F
+    env.parse_thm(Thm, "NOT_TRUE", &[], &[], &[], "E (N (K \"T\")) (K \"F\")");
+    // !t. t \/ ~t
+    env.parse_thm(Thm, "EXCLUDED_MIDDLE", &[bool_ty], &["V \"t\" z1"], &[], "U t1 (D t1 (N t1))");
+    // !(x:A) (y:B) a b. x,y = a,b <=> x = a /\ y = b
+    env.parse_thm(Thm, "PAIR_EQ", &[a_ty, b_ty],
+      &["V \"x\" z1", "V \"y\" z2", "V \"a\" z1", "V \"b\" z2"],
+      &[], "U t1 (U t2 (U t3 (U t4 (E (E (P t1 t2) (P t3 t4)) (C (E t1 t3) (E t2 t4))))))");
+    // !p:A#B. ?x y. p = x,y
+    env.parse_thm(Thm, "PAIR_SURJECTIVE", &[a_ty, b_ty, "K \"prod\" z1 z2"],
+      &["V \"p\" z3", "V \"x\" z1", "V \"y\" z2"],
+      &[], "U t1 (X t2 (X t3 (E t1 (P t2 t3))))");
+    // !x y. FST (x,y) = x
+    env.parse_thm(Thm, "FST", &[a_ty, b_ty], &["V \"x\" z1", "V \"y\" z2"],
+      &[], "U t1 (U t2 (E (A (K \"FST\") (P t1 t2)) t1))");
+    // !x y. SND (x,y) = y
+    env.parse_thm(Thm, "SND", &[a_ty, b_ty], &["V \"x\" z1", "V \"y\" z2"],
+      &[], "U t1 (U t2 (E (A (K \"SND\") (P t1 t2)) t2))");
+    // !x. ~(IND_SUC x = IND_0)
+    env.parse_thm(Thm, "IND_SUC_0", &[ind_ty], &["V \"x\" z1"],
+      &[], r#"U t1 (N (E (A (K "IND_SUC") t1) (K "IND_0")))"#);
+    // !x1 x2. IND_SUC x1 = IND_SUC x2 <=> x1 = x2
+    env.parse_thm(Thm, "IND_SUC_INJ", &[ind_ty], &["V \"x1\" z1", "V \"x1\" z2", "K \"IND_SUC\""],
+      &[], "U t1 (U t2 (E (E (A t3 t1) (A t3 t2)) (E t1 t2)))");
+    // !n. ~(SUC n = 0)
+    env.parse_thm(Thm, "NOT_SUC", &[num_ty], &["V \"n\" z1", "M 0", suc],
+      &[], r#"U t1 (N (E (A t3 t1) t2))"#);
+    // !m n. SUC m = SUC n <=> m = n
+    env.parse_thm(Thm, "SUC_INJ", &[num_ty], &["V \"m\" z1", "V \"n\" z1", suc],
+      &[], "U t1 (U t2 (E (E (A t3 t1) (A t3 t2)) (E t1 t2)))");
+    // !m. m = 0 \/ (?n. m = SUC n)
+    env.parse_thm(Thm, "num_CASES", &[num_ty], &["V \"m\" z1", "M 0", "V \"n\" z1", suc],
+      &[], "U t1 (D (E t1 t2) (X t3 (E t1 (A t4 t3))))");
+    // !P. P 0 /\ (!n. P n ==> P (SUC n)) ==> (!n. P n)
+    env.parse_thm(Thm, "num_INDUCTION", &[num_ty, bool_ty, "F z1 z2"],
+      &["V \"P\" z3", "V \"n\" z1", "M 0", suc],
+      &[], "U t1 (I (C (A t1 t3) (U t2 (I (A t1 t2) (A t1 (A t4 t2))))) (U t2 (A t1 t2)))");
+    // !(e:A) (f:A->num->A). ?(fn:num->A). fn 0 = e /\ (!n. fn (SUC n) = f (fn n) n)
+    env.parse_thm(Thm, "num_RECURSION", &[a_ty, num_ty, "F z2 z1", "F z1 z3"],
+      &["V \"e\" z1", "V \"f\" z4", "V \"fn\" z3", "M 0", "V \"n\" z2", suc],
+      &[], "U t1 (U t2 (X t3 (C (E (A t3 t4) t1) \
+                                (U t5 (E (A t3 (A t6 t5)) (B t2 (A t3 t5) t5))))))");
+    env.add_thm_alias(Thm, "PRE", pre);
+    env.add_thm_alias(Thm, "ADD", add);
+    env.add_thm_alias(Thm, "SUB", sub);
+    // (!n. 0 * n = 0) /\ (!m n. SUC m * n = n + m * n)
+    env.parse_thm(Thm, "MULT1", &[num_ty],
+      &["K \"*\"", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
+      &[], "C (U t5 (E (B t1 t2 t5) t2)) \
+              (U t4 (U t5 (E (B t1 (A t3 t4) t5) (B (K \"+\") t5 (B t1 t4 t5)))))");
+    env.add_thm_alias(Thm, "EXP", exp);
+    env.add_thm_alias(Thm, "LT", lt);
+    // !m n. m <= n <=> m < n \/ m = n
+    env.parse_thm(Thm, "LE1", &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      &[], r#"U t1 (U t2 (E (B (K "<=") t1 t2) (D (B (K "<") t1 t2) (E t1 t2))))"#);
+    // !m n. m > n <=> n < m
+    env.parse_thm(Thm, "GT1", &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      &[], r#"U t1 (U t2 (E (B (K ">") t1 t2) (B (K "<") t2 t1)))"#);
+    // !m n. m >= n <=> n <= m
+    env.parse_thm(Thm, "GE1", &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      &[], r#"U t1 (U t2 (E (B (K ">=") t1 t2) (B (K "<=") t2 t1)))"#);
+    env.add_thm_alias(Thm, "EVEN", even);
+    // !n. ODD n <=> ~EVEN n
+    env.parse_thm(Thm, "ODD1", &[num_ty], &["V \"n\" z1"],
+      &[], r#"U t1 (E (A (K "ODD") t1) (N (A (K "EVEN") t1))))"#);
     env
   }
 }

@@ -2,14 +2,13 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ops::Index;
 use std::ops::IndexMut;
 use std::rc::Rc;
 use std::borrow::Cow;
-use bitvec::prelude::{BitBox, BitVec};
+use bitvec::prelude::BitBox;
 use num::{BigUint, Zero};
 
 use crate::types::*;
@@ -239,7 +238,7 @@ pub struct TypeTranslator<'a, 'b> {
 impl<'a, 'b> TypeTranslator<'a, 'b> {
   fn tr(&mut self, ty: TypeId) -> TypeId {
     if let Some(i) = self.imported[ty.into_usize()] { return i }
-    let n = match *self.arena[ty] {
+    let n = match *self.store[ty].0 {
       Type::Var(n) =>
         self.inst.get(n.into_usize()).copied().unwrap_or_else(|| self.arena.mk_var(n)),
       Type::Const(c, ref tys) => {
@@ -368,9 +367,6 @@ impl<'a> TermArena<'a> {
   pub fn dest_lam(&self, a: TermId) -> (VarId, TermId) {
     if let Term::Lam(a, b) = *self[a] { (a, b) }
     else { panic!("dest_lam: not a lambda") }
-  }
-  pub fn mk_lam_term(&mut self, x: TermId, t: TermId) -> TermId {
-    self.mk_lam(self.dest_var(x), t)
   }
   pub fn mk_binder(&mut self, b: ConstId, x: VarId, t: TermId) -> TermId {
     term!(self, A (K(b, vec![self[x].ty])) (L x t))
@@ -1108,9 +1104,12 @@ impl Environment {
     self.thms.push(d);
     n
   }
+  pub fn add_thm_alias<'a>(&mut self, k: FetchKind, name: impl Into<Cow<'a, str>>, th: ThmId) {
+    assert!(self.trans.fetches[k].insert(name.into().into_owned(), th).is_none());
+  }
   pub fn add_thm<'a>(&mut self, k: FetchKind, name: impl Into<Cow<'a, str>>, d: ThmDef) -> ThmId {
     let n = self.add_anon_thm(d);
-    assert!(self.trans.fetches[k].insert(name.into().into_owned(), n).is_none());
+    self.add_thm_alias(k, name, n);
     n
   }
 
