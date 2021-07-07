@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -560,6 +561,26 @@ impl<'a> TermArena<'a> {
   fn import<R>(&mut self, store: &TermStore, f: impl FnOnce(TermInstType<'a, '_>) -> R) -> R {
     self.inst_type(store, &[], f)
   }
+
+  fn inst_term_simple(&mut self, inst: &mut HashMap<VarId, TermId>, tm: TermId) -> TermId {
+    match *self[tm].clone() {
+      Term::Var(x) => inst.get(&x).cloned().unwrap_or(tm),
+      Term::Const(_, _) => tm,
+      Term::App(f, x) =>
+        term!(self, A (self.inst_term_simple(inst, f)) (self.inst_term_simple(inst, x))),
+      Term::Lam(x, e) => {
+        if let Some(old) = inst.remove(&x) {
+          let r = term!(self, L x (self.inst_term(inst, e)));
+          inst.insert(x, old);
+          r
+        } else { term!(self, L x (self.inst_term_simple(inst, e))) }
+      }
+    }
+  }
+
+  fn inst_term(&mut self, inst: &mut HashMap<VarId, TermId>, tm: TermId) -> TermId {
+    if inst.is_empty() { tm } else { self.inst_term_simple(inst, tm) }
+  }
 }
 
 pub struct TermInstType<'a, 'b> {
@@ -1067,35 +1088,37 @@ pub struct OwnedTerm {
 }
 
 impl OwnedType {
-  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut TypeArena<'a>) -> TypeId) -> OwnedType {
+  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut TypeArena<'a>) -> TypeId) -> (OwnedType, Vec<TypeId>) {
     let mut a = TypeArena::new(env);
     let ty = f(&mut a);
     let mut c = CollectTyVarsType::default();
     c.collect(&a, ty);
     let mut arena = a.into_store();
     c.apply(&mut arena);
-    OwnedType {arena, tyvars: c.get().len() as u32, ty}
+    let vec = c.get();
+    (OwnedType {arena, tyvars: vec.len() as u32, ty}, vec)
   }
 }
 
 impl OwnedTerm {
-  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut TermArena<'a>) -> TermId) -> OwnedTerm {
+  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut TermArena<'a>) -> TermId) -> (OwnedTerm, Vec<TypeId>) {
     let mut a = TermArena::new(env);
     let term = f(&mut a);
     let mut c = CollectTyVarsTerm::default();
     c.collect(&a, term);
     let mut arena = a.into_store();
     c.c.apply(&mut arena.tys);
-    OwnedTerm {arena, tyvars: c.c.get().len() as u32, term}
+    let vec = c.c.get();
+    (OwnedTerm {arena, tyvars: vec.len() as u32, term}, vec)
   }
 }
 
-pub type TypedefInfo = (ThmDef, (TypeId, TermId));
+pub type TypedefInfo = (ThmDef, TypeId, TermId);
 
 impl ThmDef {
   pub fn with_and<'a, R>(env: &'a Environment,
     f: impl FnOnce(&mut ProofArena<'a>) -> (ProofId, R)
-  ) -> (ThmDef, R) {
+  ) -> ((ThmDef, Vec<TypeId>), R) {
     let mut a = ProofArena::new(env);
     let (n, r) = f(&mut a);
     let Proof {hyps, concl} = *a[n];
@@ -1110,18 +1133,19 @@ impl ThmDef {
     for &h in &*hyps { c.collect(&a, h) }
     let mut arena = a.into_store();
     c.c.apply(&mut arena.tys);
-    let tyvars = c.c.get().len() as u32;
-    (ThmDef { arena, tyvars, hyps, concl }, r)
+    let vec = c.c.get();
+    let tyvars = vec.len() as u32;
+    ((ThmDef { arena, tyvars, hyps, concl }, vec), r)
   }
 
-  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut ProofArena<'a>) -> ProofId) -> ThmDef {
+  pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut ProofArena<'a>) -> ProofId) -> (ThmDef, Vec<TypeId>) {
     Self::with_and(env, |a| (f(a), ())).0
   }
 
   pub fn with_typedef_info<'a>(env: &'a Environment,
     f: impl FnOnce(&mut ProofArena<'a>) -> ProofId
-  ) -> TypedefInfo {
-    Self::with_and(env, |a| {
+  ) -> (TypedefInfo, Vec<TypeId>) {
+    let ((pf, vec), (ty, p)) = Self::with_and(env, |a| {
       let pf = f(a);
       let Proof {hyps, concl} = *a[pf];
       assert!(hyps == HypsId::EMPTY, "hypotheses not allowed");
@@ -1130,7 +1154,8 @@ impl ThmDef {
       assert_eq!(v, a.dest_var(v1));
       let ty = (**a)[v].ty;
       (pf, (ty, p))
-    })
+    });
+    ((pf, ty, p), vec)
   }
 }
 
@@ -1207,18 +1232,18 @@ impl Environment {
     let TydefData {ty, p, exists_p} = *self.tyops[c.into_usize()].tydef
       .as_ref().expect("add_type_bijs: not a type operator");
     let store = &self.thms[exists_p.into_usize()].arena;
-    let absc = OwnedType::with(self, |a| {
+    let (absc, _) = OwnedType::with(self, |a| {
       // abs[v0..vn]: A -> C[v0..vn]
       ty!(a, (a.import(&store.tys, |mut tr| tr.tr(ty))) -> (a.mk_const_upto(c)))
     });
     let absc = self.add_const(&*abs, absc);
     let store = &self.thms[exists_p.into_usize()].arena;
-    let repc = OwnedType::with(self, |a| {
+    let (repc, _) = OwnedType::with(self, |a| {
       // rep[v0..vn]: C[v0..vn] -> A
       ty!(a, (a.mk_const_upto(c)) -> (a.import(&store.tys, |mut tr| tr.tr(ty))))
     });
     let repc = self.add_const(&*rep, repc);
-    let abs_rep = ThmDef::with(self, |a| {
+    let (abs_rep, _) = ThmDef::with(self, |a| {
       let t = &mut a.tms;
       let abs = t.mk_const_upto(absc);
       let rep = t.mk_const_upto(repc);
@@ -1229,7 +1254,7 @@ impl Environment {
     });
     let abs_rep = self.add_thm(FetchKind::TypeBij1, cname, abs_rep);
     let store = &self.thms[exists_p.into_usize()].arena;
-    let rep_abs = ThmDef::with(self, |a| {
+    let (rep_abs, _) = ThmDef::with(self, |a| {
       let t = &mut a.tms;
       let abs = t.mk_const_upto(absc);
       let rep = t.mk_const_upto(repc);
@@ -1253,21 +1278,42 @@ impl Environment {
     (self.add_const(&*x, OwnedType::default()), self.add_thm(FetchKind::Def, x, ThmDef::default()))
   }
 
-  pub fn add_basic_typedef<'a>(&mut self, x: impl Into<Cow<'a, str>>, (th, (ty, p)): TypedefInfo) -> TyopId {
+  pub fn add_basic_typedef<'a>(&mut self, x: impl Into<Cow<'a, str>>, (th, ty, p): TypedefInfo) -> TyopId {
     let x = x.into();
     let arity = th.tyvars;
     let exists_p = self.add_anon_thm(th);
     self.add_tyop(&*x, arity, Some(TydefData { exists_p, ty, p }))
   }
 
-  pub fn add_spec<'a, I: Into<Cow<'a, str>>>(&mut self,
-    xs: impl IntoIterator<Item=I>, ThmDef {arena, tyvars, hyps, concl}: ThmDef) {
+  pub fn add_spec<'a, T: Borrow<str>>(&mut self,
+    xs: &[T], ThmDef {arena, hyps, concl, ..}: ThmDef) -> ThmId {
     assert!(hyps.is_empty());
     let mut term = concl;
+    let mut subst = vec![];
     for x in xs {
-      let x = x.into(); self.add_const(&*x, OwnedType::default());
-      self.add_thm(FetchKind::Spec, x, ThmDef::default());
+      let x = x.borrow();
+      let (v, body) = arena.dest_exists(term);
+      let (tm, args) = OwnedTerm::with(self, |a| {
+        let (v, body) = a.import(&arena, |mut tr| (tr.tr_var(v), tr.tr_term(body)));
+        let t = a.mk_select(v, body);
+        let mut inst = subst.iter()
+          .map(|&(v, c, ref args)| (v, a.mk_const(c, Vec::clone(args)))).collect();
+        a.inst_term(&mut inst, t)
+      });
+      let (c, th) = self.add_basic_def(&*x, tm);
+      self.add_thm_alias(FetchKind::Def, x, th);
+      subst.push((v, c, args));
+      term = body;
     }
+    let n = self.add_anon_thm(ThmDef::with(self, |a| {
+      let t = a.import(&arena, |mut tr| tr.tr_term(term));
+      let mut inst = subst.iter()
+        .map(|&(v, c, ref args)| (v, a.mk_const(c, Vec::clone(args)))).collect();
+      let concl = a.inst_term(&mut inst, t);
+      a.axiom(vec![], concl)
+    }).0);
+    for x in xs { self.add_thm_alias(FetchKind::Spec, x.borrow(), n) }
+    n
   }
 
   pub fn add_axiom(&mut self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {

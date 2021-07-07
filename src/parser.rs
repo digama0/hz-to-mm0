@@ -943,14 +943,14 @@ impl Environment {
     OwnedType::with(self, |a| {
       let tys = a.parse_type_str_preamble(tys);
       a.parse_type_str(&tys, ty)
-    })
+    }).0
   }
   pub fn parse_owned_term(&mut self, tys: &[&str], tms: &[&str], tm: &str) -> OwnedTerm {
     OwnedTerm::with(self, |a| {
       let tys = a.parse_type_str_preamble(tys);
       let tms = a.parse_term_str_preamble(&tys, tms);
       a.parse_term_str(&tys, &tms, tm)
-    })
+    }).0
   }
   pub fn parse_thm_def(&mut self, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmDef {
     ThmDef::with(self, |a| {
@@ -959,7 +959,7 @@ impl Environment {
       let hyps = hyps.iter().map(|h| a.parse_term_str(&tys, &tms, h)).collect();
       let concl = a.parse_term_str(&tys, &tms, concl);
       a.axiom(hyps, concl)
-    })
+    }).0
   }
   pub fn parse_typedef_info(&mut self, tys: &[&str], tms: &[&str], concl: &str) -> TypedefInfo {
     ThmDef::with_typedef_info(self, |a| {
@@ -967,7 +967,7 @@ impl Environment {
       let tms = a.parse_term_str_preamble(&tys, tms);
       let concl = a.parse_term_str(&tys, &tms, concl);
       a.axiom(vec![], concl)
-    })
+    }).0
   }
   pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
     let ty = self.parse_owned_type(tys, ty);
@@ -990,9 +990,9 @@ impl Environment {
     let th = self.parse_thm_def(tys, tms, hyps, concl);
     self.add_thm(k, x, th)
   }
-  pub fn parse_spec<const N: usize>(&mut self,
-    xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str) -> [ThmId; N] {
-    xs.iter().map(|&x| todo!()).collect::<Vec<_>>().try_into().unwrap()
+  pub fn parse_spec(&mut self, xs: &[&str], tys: &[&str], tms: &[&str], tm: &str) -> ThmId {
+    let th = self.parse_thm_def(tys, tms, &[], tm);
+    self.add_spec(xs, th)
   }
 }
 
@@ -1049,14 +1049,14 @@ impl Importer {
         self.env.add_tyop(x, arity, None);
       }
       ObjectSpec::ConstDecl(x) => {
-        let ty = OwnedType::with(&self.env, |a| {
+        let (ty, _) = OwnedType::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           parse_type_section(&mut tk, &mut lexer, &tys)
         });
         self.env.add_const(x, ty);
       }
       ObjectSpec::Axiom(x) => {
-        let tm = OwnedTerm::with(&self.env, |a| {
+        let (tm, _) = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1064,7 +1064,7 @@ impl Importer {
         self.env.add_axiom(x, tm);
       }
       ObjectSpec::BasicDef(x) => {
-        let tm = OwnedTerm::with(&self.env, |a| {
+        let (tm, _) = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1072,7 +1072,7 @@ impl Importer {
         self.env.add_basic_def(x, tm);
       }
       ObjectSpec::Def(x) => {
-        let tm = OwnedTerm::with(&self.env, |a| {
+        let (tm, _) = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1080,15 +1080,15 @@ impl Importer {
         self.env.add_def(x);
       }
       ObjectSpec::Spec(xs) => {
-        let pr = ThmDef::with(&self.env, |a| {
+        let (pr, _) = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_spec(Vec::from(xs), pr)
+        self.env.add_spec(&xs, pr);
       }
       ObjectSpec::BasicTypedef(x) => {
-        let pr = ThmDef::with_typedef_info(&self.env, |a| {
+        let (pr, _) = ThmDef::with_typedef_info(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
