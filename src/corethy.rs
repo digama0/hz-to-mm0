@@ -146,31 +146,31 @@ impl Environment {
       &[num_ty], &[vn], "L t1 (A (K \"SUC\") (A (K \"BIT0\") t1))").0);
     // PRE 0 = 0 /\ (!n. PRE (SUC n) = n))
     let [pre] = env.parse_spec(&["PRE"], &[num_ty], &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
-      "S t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
+      "X t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
     // (!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))
     let [add] = env.parse_spec(&["+"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"+\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "S t1 (C (U t5 (E (B t1 t2 t5) t5)) \
+      "X t1 (C (U t5 (E (B t1 t2 t5) t5)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (A t3 (B t1 t4 t5))))))");
     // (!n. 0 * n = 0) /\ (!m n. SUC m * n = m * n + n)
     let [_] = env.parse_spec(&["*"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"*\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "S t1 (C (U t5 (E (B t1 t2 t5) t2)) \
+      "X t1 (C (U t5 (E (B t1 t2 t5) t2)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (B (K \"+\") (B t1 t4 t5) t5)))))");
     // (!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)
     let [exp] = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"EXP\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "S t1 (C (U t4 (E (B t1 t2 t4) (M 1))) \
+      "X t1 (C (U t4 (E (B t1 t2 t4) (M 1))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (B (K \"*\") t4 (B t1 t4 t5))))))");
     // (!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)
     let [_] = env.parse_spec(&["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<=\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "S t1 (C (U t4 (E (B t1 t4 t2) (E t4 t2))) \
+      "X t1 (C (U t4 (E (B t1 t4 t2) (E t4 t2))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 (A t3 t4)) (B t1 t4 t5))))))");
     // (!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)
     let [lt] = env.parse_spec(&["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "S t1 (C (U t4 (E (B t1 t4 t2) (K \"F\"))) \
+      "X t1 (C (U t4 (E (B t1 t4 t2) (K \"F\"))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 t5) (B t1 t4 t5))))))");
     // !m n. m >= n <=> n <= m
     env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
@@ -181,15 +181,15 @@ impl Environment {
     // (EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)
     let [even] = env.parse_spec(&["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"EVEN\" z2", "M 0", suc, "V \"n\" z1"],
-      "S t1 (C (E (A t1 t2) (K \"T\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+      "X t1 (C (E (A t1 t2) (K \"T\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
     // (ODD 0 <=> F) /\ (!n. ODD (SUC n) <=> ~ODD n)
     let [_] = env.parse_spec(&["ODD"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"ODD\" z2", "M 0", suc, "V \"n\" z1"],
-      "S t1 (C (E (A t1 t2) (K \"F\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+      "X t1 (C (E (A t1 t2) (K \"F\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
     // (!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))
     let [sub] = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"-\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1", "K \"PRE\""],
-      "S t1 (C (U t4 (E (B t1 t2 t4) t2)) \
+      "X t1 (C (U t4 (E (B t1 t2 t4) t2)) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (A t6 (B t1 t4 t5))))))");
     // TYPE_DEFINITION = \(P:A->bool) (rep:B->A). ONE_ONE rep /\ (!x:A. P x <=> (?y:B. x = rep y))
     env.parse_basic_def("TYPE_DEFINITION", &[a_ty, b_ty, bool_ty, "F z1 z3", "F z2 z1"],

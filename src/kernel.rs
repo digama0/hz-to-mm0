@@ -24,13 +24,15 @@ impl Node for Hyps { type Idx = HypsId; }
 #[derive(Debug)]
 pub struct Store<H, A = ()>(Vec<(Rc<H>, A)>);
 
+impl<H, A: Clone> Clone for Store<H, A> {
+  fn clone(&self) -> Self { Self(self.0.clone()) }
+}
 impl<H: Node, A> Index<H::Idx> for Store<H, A> {
   type Output = (Rc<H>, A);
   fn index(&self, n: H::Idx) -> &Self::Output {
     &self.0[n.into_usize()]
   }
 }
-
 impl<H: Node, A> IndexMut<H::Idx> for Store<H, A> {
   fn index_mut(&mut self, n: H::Idx) -> &mut Self::Output {
     &mut self.0[n.into_usize()]
@@ -85,7 +87,31 @@ impl<H: Node> Dedup<H> {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct TyVar(String);
 
-pub type TypeStore = Store<Type>;
+#[derive(Debug, Clone, Default)]
+pub struct TypeStore(pub Store<Type>);
+
+pub trait HasTypeStore: Index<TypeId, Output=Rc<Type>> {
+  fn type_store(&self) -> &Store<Type>;
+
+  fn dest_fun(&self, a: TypeId) -> (TypeId, TypeId) {
+    if let Type::Const(TyopId::FUN, ref args) = *self[a] { (args[0], args[1]) }
+    else { panic!("dest_fun: not a function type") }
+  }
+
+  fn types(&self) -> &[(Rc<Type>, ())] { &self.type_store().0 }
+}
+
+macro_rules! impl_index { ($ty:ty: $($tgt:ty => $f:ident),*) => {$(
+  impl Index<<$tgt as Node>::Idx> for $ty {
+    type Output = Rc<$tgt>;
+    fn index(&self, n: <$tgt as Node>::Idx) -> &Rc<$tgt> { &self.$f()[n].0 }
+  }
+)*}}
+
+impl_index!(TypeStore: Type => type_store);
+impl HasTypeStore for TypeStore {
+  fn type_store(&self) -> &Store<Type> { &self.0 }
+}
 
 #[derive(Debug)]
 pub struct TypeArena<'a> {
@@ -97,9 +123,9 @@ pub struct TypeArena<'a> {
   bool_binop: Option<TypeId>,
 }
 
-impl Index<TypeId> for TypeArena<'_> {
-  type Output = Rc<Type>;
-  fn index(&self, n: TypeId) -> &Rc<Type> { &self.tys[n].0 }
+impl_index!(TypeArena<'_>: Type => type_store);
+impl HasTypeStore for TypeArena<'_> {
+  fn type_store(&self) -> &Store<Type> { &self.tys.store }
 }
 
 macro_rules! ty {
@@ -143,7 +169,7 @@ macro_rules! term {
 }
 
 impl<'a> TypeArena<'a> {
-  pub fn into_store(self) -> TypeStore { self.tys.store }
+  pub fn into_store(self) -> TypeStore { TypeStore(self.tys.store) }
   pub fn new(env: &'a Environment) -> Self {
     Self {
       env,
@@ -175,11 +201,6 @@ impl<'a> TypeArena<'a> {
     self.tys.add(Type::Const(c, tys))
   }
 
-  pub fn dest_fun(&self, a: TypeId) -> (TypeId, TypeId) {
-    if let Type::Const(TyopId::FUN, ref args) = *self[a] { (args[0], args[1]) }
-    else { panic!("dest_fun: not a function type") }
-  }
-
   fn inst_extern(&mut self, inst: &[TypeId], tr: &[TypeId], ty: &Type) -> TypeId {
     match *ty {
       Type::Var(n) => inst.get(n.into_usize()).copied().unwrap_or_else(|| self.mk_var(n)),
@@ -189,7 +210,7 @@ impl<'a> TypeArena<'a> {
   }
   fn inst_store(&mut self, inst: &[TypeId], tys: &TypeStore) -> Vec<TypeId> {
     let mut tr = vec![];
-    for ty in &tys.0 { tr.push(self.inst_extern(inst, &tr, &*ty.0)) }
+    for ty in tys.types() { tr.push(self.inst_extern(inst, &tr, &*ty.0)) }
     tr
   }
   fn inst_owned(&mut self, inst: &[TypeId], ty: &OwnedType) -> TypeId {
@@ -199,7 +220,7 @@ impl<'a> TypeArena<'a> {
   fn inst<R>(&mut self, store: &TypeStore, inst: &[TypeId],
     f: impl FnOnce(TypeTranslator<'a, '_>) -> R
   ) -> R {
-    let mut vec = vec![None; store.0.len()];
+    let mut vec = vec![None; store.types().len()];
     f(TypeTranslator { arena: self, store, inst, imported: &mut vec })
   }
 
@@ -238,7 +259,7 @@ pub struct TypeTranslator<'a, 'b> {
 impl<'a, 'b> TypeTranslator<'a, 'b> {
   fn tr(&mut self, ty: TypeId) -> TypeId {
     if let Some(i) = self.imported[ty.into_usize()] { return i }
-    let n = match *self.store[ty].0 {
+    let n = match *self.store[ty] {
       Type::Var(n) =>
         self.inst.get(n.into_usize()).copied().unwrap_or_else(|| self.arena.mk_var(n)),
       Type::Const(c, ref tys) => {
@@ -254,7 +275,92 @@ impl<'a, 'b> TypeTranslator<'a, 'b> {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Var { pub name: String, pub ty: TypeId }
 
-pub type TermStore = (TypeStore, Store<Var>, Store<Term, TypeId>);
+#[derive(Debug, Clone, Default)]
+pub struct TermStore {
+  pub tys: TypeStore,
+  pub vars: Store<Var>,
+  pub tms: Store<Term, TypeId>
+}
+
+pub trait HasTermStore:
+  HasTypeStore +
+  Index<VarId, Output=Rc<Var>> +
+  Index<TermId, Output=Rc<Term>>
+{
+  fn var_store(&self) -> &Store<Var>;
+  fn term_store(&self) -> &Store<Term, TypeId>;
+
+  fn vars(&self) -> &[(Rc<Var>, ())] { &self.var_store().0 }
+  fn terms(&self) -> &[(Rc<Term>, TypeId)] { &self.term_store().0 }
+
+  fn type_of(&self, tm: TermId) -> TypeId { self.term_store()[tm].1 }
+  fn dest_var(&self, x: TermId) -> VarId {
+    if let Term::Var(v) = *self[x] { v } else { panic!("dest_var: not a variable") }
+  }
+  fn dest_app(&self, a: TermId) -> (TermId, TermId) {
+    if let Term::App(a, b) = *self[a] { (a, b) }
+    else { panic!("dest_app: not an application") }
+  }
+  fn dest_lam(&self, a: TermId) -> (VarId, TermId) {
+    if let Term::Lam(a, b) = *self[a] { (a, b) }
+    else { panic!("dest_lam: not a lambda") }
+  }
+  fn dest_binder(&self, c: ConstId, a: TermId) -> (VarId, TermId) {
+    let (e, f) = self.dest_app(a);
+    assert!(matches!(*self[e], Term::Const(c2, _) if c == c2), "dest_binder: not the right binder");
+    self.dest_lam(f)
+  }
+  fn dest_forall(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::FORALL, a) }
+  fn dest_exists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::EXISTS, a) }
+  fn dest_uexists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::UEXISTS, a) }
+  fn dest_select(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::SELECT, a) }
+
+  fn alpha_cmp(&self, a: TermId, b: TermId) -> Ordering {
+    fn rec<T: HasTermStore + ?Sized>(this: &T,
+      ctx: &mut Vec<(VarId, VarId)>, a: TermId, b: TermId
+    ) -> Ordering {
+      if a == b && ctx.iter().all(|&(x, y)| x == y) { return Ordering::Equal }
+      match (&*this[a], &*this[b]) {
+        (&Term::Var(a), &Term::Var(b)) => {
+          for &(v1, v2) in ctx.iter().rev() {
+            match (a == v1, b == v2) {
+              (true, true) => return Ordering::Equal,
+              (true, false) => return Ordering::Less,
+              (false, true) => return Ordering::Greater,
+              (false, false) => {}
+            }
+          }
+          a.cmp(&b)
+        }
+        (Term::Const(_, _), Term::Const(_, _)) => a.cmp(&b),
+        (&Term::App(s1, t1), &Term::App(s2, t2)) =>
+          rec(this, ctx, s1, s2).then_with(|| rec(this, ctx, t1, t2)),
+        (&Term::Lam(x1, t1), &Term::Lam(x2, t2)) => {
+          this[x1].ty.cmp(&this[x2].ty).then_with(|| {
+            ctx.push((x1, x2));
+            (rec(this, ctx, t1, t2), ctx.pop()).0
+          })
+        }
+        (Term::Const(_, _), _) => Ordering::Less,
+        (_, Term::Const(_, _)) => Ordering::Greater,
+        (Term::Var(_), _) => Ordering::Less,
+        (_, Term::Var(_)) => Ordering::Greater,
+        (Term::App(_, _), _) => Ordering::Less,
+        (_, Term::App(_, _)) => Ordering::Greater,
+      }
+    }
+    rec(self, &mut vec![], a, b)
+  }
+}
+
+impl_index!(TermStore: Type => type_store, Var => var_store, Term => term_store);
+impl HasTypeStore for TermStore {
+  fn type_store(&self) -> &Store<Type> { self.tys.type_store() }
+}
+impl HasTermStore for TermStore {
+  fn var_store(&self) -> &Store<Var> { &self.vars }
+  fn term_store(&self) -> &Store<Term, TypeId> { &self.tms }
+}
 
 #[derive(Debug)]
 pub struct TermArena<'a> {
@@ -272,6 +378,15 @@ macro_rules! get_term_cache { ($self:ident, $cache:ident, $c:ident, $ty:ident) =
   }
 }}
 
+impl_index!(TermArena<'_>: Type => type_store, Var => var_store, Term => term_store);
+impl HasTypeStore for TermArena<'_> {
+  fn type_store(&self) -> &Store<Type> { self.tys.type_store() }
+}
+impl HasTermStore for TermArena<'_> {
+  fn var_store(&self) -> &Store<Var> { &self.vars.store }
+  fn term_store(&self) -> &Store<Term, TypeId> { &self.tms.store }
+}
+
 impl<'a> Deref for TermArena<'a> {
   type Target = TypeArena<'a>;
   fn deref(&self) -> &Self::Target { &self.tys }
@@ -280,17 +395,10 @@ impl DerefMut for TermArena<'_> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.tys }
 }
 
-impl Index<VarId> for TermArena<'_> {
-  type Output = Rc<Var>;
-  fn index(&self, n: VarId) -> &Rc<Var> { &self.vars[n].0 }
-}
-impl Index<TermId> for TermArena<'_> {
-  type Output = Rc<Term>;
-  fn index(&self, n: TermId) -> &Rc<Term> { &self.tms[n].0 }
-}
-
 impl<'a> TermArena<'a> {
-  pub fn into_store(self) -> TermStore { (self.tys.into_store(), self.vars.store, self.tms.store) }
+  pub fn into_store(self) -> TermStore {
+    TermStore { tys: self.tys.into_store(), vars: self.vars.store, tms: self.tms.store }
+  }
   pub fn new(env: &'a Environment) -> Self {
     Self {
       tys: TypeArena::new(env),
@@ -309,7 +417,6 @@ impl<'a> TermArena<'a> {
     self.add_self(tm, |this, _| mk(&mut this.tys))
   }
 
-  pub fn type_of(&self, tm: TermId) -> TypeId { self.tms[tm].1 }
   pub fn mk_var_id(&mut self, name: String, ty: TypeId) -> VarId {
     self.vars.add(Var {name, ty})
   }
@@ -319,9 +426,6 @@ impl<'a> TermArena<'a> {
   }
   pub fn mk_var(&mut self, x: VarId) -> TermId {
     self.tms.add_val(Term::Var(x), self[x].ty)
-  }
-  pub fn dest_var(&self, x: TermId) -> VarId {
-    if let Term::Var(v) = *self[x] { v } else { panic!("dest_var: not a variable") }
   }
   pub fn mk_const(&mut self, c: ConstId, tys: Vec<TypeId>) -> TermId {
     self.add_self(Term::Const(c, tys), |this, n| {
@@ -352,10 +456,6 @@ impl<'a> TermArena<'a> {
     assert_eq!(a, a2, "mk_app: type mismatch");
     self.tms.add_val(Term::App(f, x), b)
   }
-  pub fn dest_app(&self, a: TermId) -> (TermId, TermId) {
-    if let Term::App(a, b) = *self[a] { (a, b) }
-    else { panic!("dest_app: not an application") }
-  }
   pub fn mk_app2(&mut self, b: TermId, x: TermId, y: TermId) -> TermId {
     term!(self, A (A b x) y)
   }
@@ -364,26 +464,13 @@ impl<'a> TermArena<'a> {
     let b = self.type_of(t);
     self.tms.add_val(Term::Lam(x, t), self.tys.mk_fun(a, b))
   }
-  pub fn dest_lam(&self, a: TermId) -> (VarId, TermId) {
-    if let Term::Lam(a, b) = *self[a] { (a, b) }
-    else { panic!("dest_lam: not a lambda") }
-  }
   pub fn mk_binder(&mut self, b: ConstId, x: VarId, t: TermId) -> TermId {
     term!(self, A (K(b, vec![self[x].ty])) (L x t))
-  }
-  pub fn dest_binder(&self, c: ConstId, a: TermId) -> (VarId, TermId) {
-    let (e, f) = self.dest_app(a);
-    assert!(matches!(*self[e], Term::Const(c2, _) if c == c2), "dest_binder: not the right binder");
-    self.dest_lam(f)
   }
   pub fn mk_forall(&mut self, x: VarId, t: TermId) -> TermId { self.mk_binder(ConstId::FORALL, x, t) }
   pub fn mk_exists(&mut self, x: VarId, t: TermId) -> TermId { self.mk_binder(ConstId::EXISTS, x, t) }
   pub fn mk_uexists(&mut self, x: VarId, t: TermId) -> TermId { self.mk_binder(ConstId::UEXISTS, x, t) }
   pub fn mk_select(&mut self, x: VarId, t: TermId) -> TermId { self.mk_binder(ConstId::SELECT, x, t) }
-  pub fn dest_forall(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::FORALL, a) }
-  pub fn dest_exists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::EXISTS, a) }
-  pub fn dest_uexists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::UEXISTS, a) }
-  pub fn dest_select(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::SELECT, a) }
   pub fn mk_quant(&mut self, q: Quant, x: VarId, t: TermId) -> TermId {
     match q {
       Quant::Lambda => self.mk_lam(x, t),
@@ -445,17 +532,15 @@ impl<'a> TermArena<'a> {
     }
     self.mk_var_id(new.name, new.ty)
   }
-  fn inst_type_store(&mut self, inst: &[TypeId],
-    (tys, vars, tms): &TermStore
-  ) -> (Vec<TypeId>, Vec<VarId>, Vec<TermId>) {
-    let trtys = self.tys.inst_store(inst, tys);
+  fn inst_type_store(&mut self, inst: &[TypeId], s: &TermStore) -> (Vec<TypeId>, Vec<VarId>, Vec<TermId>) {
+    let trtys = self.tys.inst_store(inst, &s.tys);
     let mut trvars = vec![];
-    for (v, _) in &vars.0 {
+    for (v, _) in s.vars() {
       trvars.push(self.mk_var_avoiding(v.name.clone(),
         trtys[v.ty.into_usize()], |v| trvars.contains(&v)))
     }
     let mut trtms = vec![];
-    for tm in &tms.0 { trtms.push(self.subst_term_once(&trtys, &trvars, &trtms, &tm.0)) }
+    for tm in s.terms() { trtms.push(self.subst_term_once(&trtys, &trvars, &trtms, &tm.0)) }
     (trtys, trvars, trtms)
   }
 
@@ -466,49 +551,14 @@ impl<'a> TermArena<'a> {
   fn inst_type<R>(&mut self, store: &TermStore,
     inst: &[TypeId], f: impl FnOnce(TermInstType<'a, '_>) -> R
   ) -> R {
-    let tys = &mut vec![None; store.0 .0.len()];
-    let vars = &mut vec![None; store.1 .0.len()];
-    let tms = &mut vec![None; store.2 .0.len()];
+    let tys = &mut vec![None; store.types().len()];
+    let vars = &mut vec![None; store.vars().len()];
+    let tms = &mut vec![None; store.terms().len()];
     f(TermInstType { arena: self, store, inst, tys, tms, vars })
   }
 
   fn import<R>(&mut self, store: &TermStore, f: impl FnOnce(TermInstType<'a, '_>) -> R) -> R {
     self.inst_type(store, &[], f)
-  }
-
-  fn alpha_cmp(&self, a: TermId, b: TermId) -> Ordering {
-    fn rec(this: &TermArena<'_>, ctx: &mut Vec<(VarId, VarId)>, a: TermId, b: TermId) -> Ordering {
-      if a == b && ctx.iter().all(|&(x, y)| x == y) { return Ordering::Equal }
-      match (&*this[a], &*this[b]) {
-        (&Term::Var(a), &Term::Var(b)) => {
-          for &(v1, v2) in ctx.iter().rev() {
-            match (a == v1, b == v2) {
-              (true, true) => return Ordering::Equal,
-              (true, false) => return Ordering::Less,
-              (false, true) => return Ordering::Greater,
-              (false, false) => {}
-            }
-          }
-          a.cmp(&b)
-        }
-        (Term::Const(_, _), Term::Const(_, _)) => a.cmp(&b),
-        (&Term::App(s1, t1), &Term::App(s2, t2)) =>
-          rec(this, ctx, s1, s2).then_with(|| rec(this, ctx, t1, t2)),
-        (&Term::Lam(x1, t1), &Term::Lam(x2, t2)) => {
-          this[x1].ty.cmp(&this[x2].ty).then_with(|| {
-            ctx.push((x1, x2));
-            (rec(this, ctx, t1, t2), ctx.pop()).0
-          })
-        }
-        (Term::Const(_, _), _) => Ordering::Less,
-        (_, Term::Const(_, _)) => Ordering::Greater,
-        (Term::Var(_), _) => Ordering::Less,
-        (_, Term::Var(_)) => Ordering::Greater,
-        (Term::App(_, _), _) => Ordering::Less,
-        (_, Term::App(_, _)) => Ordering::Greater,
-      }
-    }
-    rec(self, &mut vec![], a, b)
   }
 }
 
@@ -524,14 +574,14 @@ impl<'a, 'b> TermInstType<'a, 'b> {
   fn as_type(&mut self) -> TypeTranslator<'a, '_> {
     TypeTranslator {
       arena: self.arena,
-      store: &self.store.0,
+      store: &self.store.tys,
       inst: self.inst,
       imported: self.tys,
     }
   }
   fn tr_var(&mut self, v: VarId) -> VarId {
     if let Some(i) = self.vars[v.into_usize()] { return i }
-    let vd = &*self.store.1[v].0;
+    let vd = &*self.store[v];
     let name = vd.name.clone();
     let ty = self.as_type().tr(vd.ty);
     let n = if self.inst.is_empty() { self.arena.mk_var_id(name, ty) } else {
@@ -576,7 +626,7 @@ impl CollectTyVarsType {
   fn get(self) -> Vec<TypeId> { self.vars }
   fn apply(&self, store: &mut TypeStore) {
     for (i, &v) in self.vars.iter().enumerate() {
-      store.0[v.into_usize()].0 = Rc::new(Type::Var(TyVarId(i as u32)));
+      store.0 .0[v.into_usize()].0 = Rc::new(Type::Var(TyVarId(i as u32)));
     }
   }
 }
@@ -721,13 +771,45 @@ pub struct Proof {
   concl: TermId,
 }
 
-pub type ProofStore = (TermStore, Store<Hyps>, Store<Proof, ProofTrace>);
+pub struct ProofStore {
+  pub tms: TermStore,
+  pub hyps: Store<Hyps>,
+  pub pfs: Store<Proof, ProofTrace>,
+}
+
+pub trait HasProofStore:
+  HasTermStore +
+  Index<HypsId, Output=Rc<Hyps>> +
+  Index<ProofId, Output=Rc<Proof>>
+{
+  fn hyps_store(&self) -> &Store<Hyps>;
+  fn proof_store(&self) -> &Store<Proof, ProofTrace>;
+
+  fn hyps(&self) -> &[(Rc<Hyps>, ())] { &self.hyps_store().0 }
+  fn proofs(&self) -> &[(Rc<Proof>, ProofTrace)] { &self.proof_store().0 }
+
+  fn trace_of(&self, th: ProofId) -> &ProofTrace { &self.proof_store()[th].1 }
+}
+
+impl_index!(ProofStore: Type => type_store, Var => var_store, Term => term_store,
+  Hyps => hyps_store, Proof => proof_store);
+impl HasTypeStore for ProofStore {
+  fn type_store(&self) -> &Store<Type> { self.tms.type_store() }
+}
+impl HasTermStore for ProofStore {
+  fn var_store(&self) -> &Store<Var> { self.tms.var_store() }
+  fn term_store(&self) -> &Store<Term, TypeId> { self.tms.term_store() }
+}
+impl HasProofStore for ProofStore {
+  fn hyps_store(&self) -> &Store<Hyps> { &self.hyps }
+  fn proof_store(&self) -> &Store<Proof, ProofTrace> { &self.pfs }
+}
 
 #[derive(Debug)]
 pub struct ProofArena<'a> {
   pub tms: TermArena<'a>,
-  pfs: Dedup<Proof, ProofTrace>,
   hyps: Dedup<Hyps>,
+  pfs: Dedup<Proof, ProofTrace>,
 }
 
 impl<'a> Deref for ProofArena<'a> {
@@ -738,20 +820,25 @@ impl DerefMut for ProofArena<'_> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.tms }
 }
 
-impl Index<HypsId> for ProofArena<'_> {
-  type Output = Hyps;
-  fn index(&self, n: HypsId) -> &Hyps { &*self.hyps[n].0 }
+impl_index!(ProofArena<'_>: Type => type_store, Var => var_store, Term => term_store,
+  Hyps => hyps_store, Proof => proof_store);
+impl HasTypeStore for ProofArena<'_> {
+  fn type_store(&self) -> &Store<Type> { self.tms.type_store() }
 }
-impl Index<ProofId> for ProofArena<'_> {
-  type Output = Proof;
-  fn index(&self, n: ProofId) -> &Proof { &*self.pfs[n].0 }
+impl HasTermStore for ProofArena<'_> {
+  fn var_store(&self) -> &Store<Var> { self.tms.var_store() }
+  fn term_store(&self) -> &Store<Term, TypeId> { self.tms.term_store() }
+}
+impl HasProofStore for ProofArena<'_> {
+  fn hyps_store(&self) -> &Store<Hyps> { &self.hyps.store }
+  fn proof_store(&self) -> &Store<Proof, ProofTrace> { &self.pfs.store }
 }
 
 impl HypsId { const EMPTY: Self = Self(0); }
 
 impl<'a> ProofArena<'a> {
   pub fn into_store(self) -> ProofStore {
-    (self.tms.into_store(), self.hyps.store, self.pfs.store)
+    ProofStore { tms: self.tms.into_store(), hyps: self.hyps.store, pfs: self.pfs.store }
   }
   fn add(&mut self, th: Proof) -> ProofId {
     self.pfs.add_val(th, ProofTrace)
@@ -788,11 +875,11 @@ impl<'a> ProofArena<'a> {
     assert_eq!(d.tyvars as usize, tys.len());
     let (trtys, trvars, trtms) = self.inst_type_store(&tys, &d.arena);
     let hyps = d.hyps.iter().map(|&tm| {
-      self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena.2[tm].0)
+      self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena[tm])
     }).collect();
     let pr = Proof {
       hyps: self.hyps_from_vec(hyps),
-      concl: self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena.2[d.concl].0)
+      concl: self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena[d.concl])
     };
     self.add(pr)
   }
@@ -964,7 +1051,7 @@ impl<'a> ProofArena<'a> {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[derive(Default)] // FIXME
 pub struct OwnedType {
   pub arena: TypeStore,
@@ -972,7 +1059,7 @@ pub struct OwnedType {
   pub ty: TypeId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OwnedTerm {
   pub arena: TermStore,
   pub tyvars: u32,
@@ -998,7 +1085,7 @@ impl OwnedTerm {
     let mut c = CollectTyVarsTerm::default();
     c.collect(&a, term);
     let mut arena = a.into_store();
-    c.c.apply(&mut arena.0);
+    c.c.apply(&mut arena.tys);
     OwnedTerm {arena, tyvars: c.c.get().len() as u32, term}
   }
 }
@@ -1011,18 +1098,18 @@ impl ThmDef {
   ) -> (ThmDef, R) {
     let mut a = ProofArena::new(env);
     let (n, r) = f(&mut a);
-    let Proof {hyps, concl} = a[n];
+    let Proof {hyps, concl} = *a[n];
     let store = a.into_store();
     let mut a = TermArena::new(env);
-    let (hyps, concl) = a.import(&store.0, |mut tr| (
-      store.1[hyps].0 .0.iter().map(|&t| tr.tr_term(t)).collect::<Box<[_]>>(),
+    let (hyps, concl) = a.import(&store.tms, |mut tr| (
+      store[hyps].0.iter().map(|&t| tr.tr_term(t)).collect::<Box<[_]>>(),
       tr.tr_term(concl)
     ));
     let mut c = CollectTyVarsTerm::default();
     c.collect(&a, concl);
     for &h in &*hyps { c.collect(&a, h) }
     let mut arena = a.into_store();
-    c.c.apply(&mut arena.0);
+    c.c.apply(&mut arena.tys);
     let tyvars = c.c.get().len() as u32;
     (ThmDef { arena, tyvars, hyps, concl }, r)
   }
@@ -1036,7 +1123,7 @@ impl ThmDef {
   ) -> TypedefInfo {
     Self::with_and(env, |a| {
       let pf = f(a);
-      let Proof {hyps, concl} = a[pf];
+      let Proof {hyps, concl} = *a[pf];
       assert!(hyps == HypsId::EMPTY, "hypotheses not allowed");
       let (v, pv) = a.dest_exists(concl);
       let (p, v1) = a.dest_app(pv);
@@ -1122,13 +1209,13 @@ impl Environment {
     let store = &self.thms[exists_p.into_usize()].arena;
     let absc = OwnedType::with(self, |a| {
       // abs[v0..vn]: A -> C[v0..vn]
-      ty!(a, (a.import(&store.0, |mut tr| tr.tr(ty))) -> (a.mk_const_upto(c)))
+      ty!(a, (a.import(&store.tys, |mut tr| tr.tr(ty))) -> (a.mk_const_upto(c)))
     });
     let absc = self.add_const(&*abs, absc);
     let store = &self.thms[exists_p.into_usize()].arena;
     let repc = OwnedType::with(self, |a| {
       // rep[v0..vn]: C[v0..vn] -> A
-      ty!(a, (a.mk_const_upto(c)) -> (a.import(&store.0, |mut tr| tr.tr(ty))))
+      ty!(a, (a.mk_const_upto(c)) -> (a.import(&store.tys, |mut tr| tr.tr(ty))))
     });
     let repc = self.add_const(&*rep, repc);
     let abs_rep = ThmDef::with(self, |a| {
@@ -1173,14 +1260,18 @@ impl Environment {
     self.add_tyop(&*x, arity, Some(TydefData { exists_p, ty, p }))
   }
 
-  pub fn add_spec<'a, I: Into<Cow<'a, str>>>(&mut self, xs: impl IntoIterator<Item=I>) {
+  pub fn add_spec<'a, I: Into<Cow<'a, str>>>(&mut self,
+    xs: impl IntoIterator<Item=I>, ThmDef {arena, tyvars, hyps, concl}: ThmDef) {
+    assert!(hyps.is_empty());
+    let mut term = concl;
     for x in xs {
       let x = x.into(); self.add_const(&*x, OwnedType::default());
       self.add_thm(FetchKind::Spec, x, ThmDef::default());
     }
   }
 
-  pub fn add_axiom(&mut self, x: String, tm: OwnedTerm) -> ThmId {
-    self.add_thm(FetchKind::Axiom, x, ThmDef::default())
+  pub fn add_axiom(&mut self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
+    assert!(matches!(*arena[arena.type_of(term)], Type::Const(TyopId::BOOL, _)));
+    self.add_thm(FetchKind::Axiom, x, ThmDef {arena, tyvars, hyps: Box::new([]), concl: term})
   }
 }

@@ -6,7 +6,8 @@ use std::io::Read;
 
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
-use crate::kernel::{Environment, OwnedTerm, OwnedType, ProofArena, TermArena, TypeArena, TypedefInfo};
+use crate::kernel::{Environment, OwnedTerm, OwnedType,
+  ProofArena, TermArena, TypeArena, TypedefInfo, HasTermStore};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -1084,7 +1085,7 @@ impl Importer {
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_spec(Vec::from(xs))
+        self.env.add_spec(Vec::from(xs), pr)
       }
       ObjectSpec::BasicTypedef(x) => {
         let pr = ThmDef::with_typedef_info(&self.env, |a| {
