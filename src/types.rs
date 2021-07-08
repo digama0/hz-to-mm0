@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Index, IndexMut};
 
-use crate::kernel::{OwnedType, TermArena, TermStore, TypeStore};
+use crate::kernel::{OwnedType, TermStore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectSpec {
@@ -97,7 +97,7 @@ impl TransTable {
       ObjectSpec::BasicDef(x) => self.fetches[FetchKind::BasicDef].contains_key(x),
       ObjectSpec::Def(x) => self.fetches[FetchKind::Def].contains_key(x),
       ObjectSpec::Spec(xs) => xs.iter().any(|x| self.fetches[FetchKind::Spec].contains_key(x)),
-      ObjectSpec::BasicTypedef(x) => false, //self.fetches[FetchKind::BasicTypedef].contains_key(x),
+      ObjectSpec::BasicTypedef(_) => false, //self.fetches[FetchKind::BasicTypedef].contains_key(x),
       ObjectSpec::Typedef(x) => self.fetches[FetchKind::Typedef].contains_key(x),
       ObjectSpec::TypeBij(x) => self.fetches[FetchKind::TypeBij1].contains_key(&x[0]),
       ObjectSpec::Thm(x) => self.fetches[FetchKind::Thm].contains_key(x),
@@ -113,7 +113,7 @@ pub enum Type {
   Const(TyopId, Vec<TypeId>),
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Binary {
   Conj,
   Disj,

@@ -2,6 +2,7 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -10,7 +11,7 @@ use std::ops::IndexMut;
 use std::rc::Rc;
 use std::borrow::Cow;
 use bitvec::prelude::BitBox;
-use num::{BigUint, Zero};
+use num::{BigUint, Zero, CheckedSub};
 
 use crate::types::*;
 
@@ -94,11 +95,17 @@ pub struct TypeStore(pub Store<Type>);
 pub trait HasTypeStore: Index<TypeId, Output=Rc<Type>> {
   fn type_store(&self) -> &Store<Type>;
 
+  fn dest_tyvar(&self, a: TypeId) -> TyVarId {
+    if let Type::Var(v) = *self[a] { v }
+    else { panic!("dest_tyvar: not a variable") }
+  }
   fn dest_fun(&self, a: TypeId) -> (TypeId, TypeId) {
     if let Type::Const(TyopId::FUN, ref args) = *self[a] { (args[0], args[1]) }
     else { panic!("dest_fun: not a function type") }
   }
-
+  fn is_bool(&self, ty: TypeId) -> bool {
+    matches!(*self[ty], Type::Const(TyopId::BOOL, _))
+  }
   fn types(&self) -> &[(Rc<Type>, ())] { &self.type_store().0 }
 }
 
@@ -158,7 +165,7 @@ macro_rules! term {
   ($self:expr, K($e:expr)) => {{ let e = $e; $self.mk_const0(e) }};
   ($self:expr, V($e:expr)) => {{ let e = $e; $self.mk_var(e) }};
   ($self:expr, L $x:tt $t:tt) => {{
-    let x = term!($self, $x); let t = term!($self, $t); $self.mk_lam(x, t)
+    let x = $x; let t = term!($self, $t); $self.mk_lam(x, t)
   }};
   ($self:expr, $e:tt => $($e2:tt)*) => {{
     let e = term!($self, $e); let e2 = term!($self, $($e2)*); $self.mk_imp(e, e2)
@@ -166,7 +173,43 @@ macro_rules! term {
   ($self:expr, $e:tt = $e2:tt) => {{
     let e = term!($self, $e); let e2 = term!($self, $e2); $self.mk_eq(e, e2)
   }};
-  ($self:expr, $($e:tt)*) => { ty!($self, $($e)*) };
+  ($self:expr, $($e:tt)*) => {{$($e)*}};
+}
+
+macro_rules! thm {
+  ($self:expr, {$($e:tt)*}) => { {$($e)*} };
+  ($self:expr, ($($e:tt)*)) => { thm!($self, $($e)*) };
+  ($self:expr, A [$($e:tt)*] [$($e2:tt)*]) => {{
+    let e = thm!($self, $($e)*); let e2 = thm!($self, $($e2)*); $self.eq_app(e, e2)
+  }};
+  ($self:expr, A [$($e:tt)*] $e2:tt) => {{
+    let e = thm!($self, $($e)*); let e2 = term!($self, $e2); $self.eq_app1(e, e2)
+  }};
+  ($self:expr, A $e:tt [$($e2:tt)*]) => {{
+    let e = term!($self, $e); let e2 = thm!($self, $($e2)*); $self.eq_app2(e, e2)
+  }};
+  ($self:expr, A $e:tt [$($e2:tt)*] [$($e3:tt)*]) => {{
+    let e = term!($self, $e); let e2 = thm!($self, $($e2)*); let e3 = thm!($self, $($e3)*);
+    $self.eq_bin(e, e2, e3)
+  }};
+  ($self:expr, A $e:tt [$($e2:tt)*] $e3:tt) => {{
+    let e = term!($self, $e); let e2 = thm!($self, $($e2)*); let e3 = term!($self, $e3);
+    $self.eq_bin1(e, e2, e3)
+  }};
+  ($self:expr, A $e:tt $e2:tt [$($e3:tt)*]) => {{
+    let e = term!($self, $e); let e2 = term!($self, $e2); let e3 = thm!($self, $($e3)*);
+    $self.eq_bin2(e, e2, e3)
+  }};
+  ($self:expr, L $x:tt [$($t:tt)*]) => {{
+    let x = $x; let t = thm!($self, $($t)*); $self.eq_lam(x, t)
+  }};
+  ($self:expr, add($hyps:expr, $($t:tt)*)) => {{
+    let hyps = $hyps; let concl = term!($self, $($t)*); $self.add(hyps, concl)
+  }};
+  ($self:expr, add0($($t:tt)*)) => {{
+    let concl = term!($self, $($t)*); $self.add0(concl)
+  }};
+  ($self:expr, $($e:tt)*) => {{$($e)*}};
 }
 
 impl<'a> TypeArena<'a> {
@@ -218,15 +261,15 @@ impl<'a> TypeArena<'a> {
     self.inst_store(inst, &ty.arena)[ty.ty.into_usize()]
   }
 
-  fn inst<R>(&mut self, store: &TypeStore, inst: &[TypeId],
-    f: impl FnOnce(TypeTranslator<'a, '_>) -> R
+  fn inst<R, S: HasTypeStore>(&mut self, store: &S, inst: &[TypeId],
+    f: impl FnOnce(TypeTranslator<'a, '_, S>) -> R
   ) -> R {
     let mut vec = vec![None; store.types().len()];
     f(TypeTranslator { arena: self, store, inst, imported: &mut vec })
   }
 
-  fn import<R>(&mut self, store: &TypeStore,
-    f: impl FnOnce(TypeTranslator<'a, '_>) -> R
+  fn import<R, S: HasTypeStore>(&mut self, store: &S,
+    f: impl FnOnce(TypeTranslator<'a, '_, S>) -> R
   ) -> R { self.inst(store, &[], f) }
 
   fn mk_bool(&mut self) -> TypeId {
@@ -250,14 +293,14 @@ impl<'a> TypeArena<'a> {
   }
 }
 
-pub struct TypeTranslator<'a, 'b> {
+pub struct TypeTranslator<'a, 'b, S> {
   arena: &'b mut TypeArena<'a>,
-  store: &'b TypeStore,
+  store: &'b S,
   inst: &'b [TypeId],
   imported: &'b mut [Option<TypeId>],
 }
 
-impl<'a, 'b> TypeTranslator<'a, 'b> {
+impl<'a, 'b, S: HasTypeStore> TypeTranslator<'a, 'b, S> {
   fn tr(&mut self, ty: TypeId) -> TypeId {
     if let Some(i) = self.imported[ty.into_usize()] { return i }
     let n = match *self.store[ty] {
@@ -295,6 +338,7 @@ pub trait HasTermStore:
   fn terms(&self) -> &[(Rc<Term>, TypeId)] { &self.term_store().0 }
 
   fn type_of(&self, tm: TermId) -> TypeId { self.term_store()[tm].1 }
+  fn is_boolean(&self, tm: TermId) -> bool { self.is_bool(self.type_of(tm)) }
   fn dest_var(&self, x: TermId) -> VarId {
     if let Term::Var(v) = *self[x] { v } else { panic!("dest_var: not a variable") }
   }
@@ -306,15 +350,56 @@ pub trait HasTermStore:
     if let Term::Lam(a, b) = *self[a] { (a, b) }
     else { panic!("dest_lam: not a lambda") }
   }
+  fn dest_const(&self, c: ConstId, e: TermId) -> &[TypeId] {
+    match *self[e] {
+      Term::Const(c2, ref ts) if c == c2 => ts,
+      _ => panic!("dest_const: constant mismatch"),
+    }
+  }
   fn dest_binder(&self, c: ConstId, a: TermId) -> (VarId, TermId) {
     let (e, f) = self.dest_app(a);
-    assert!(matches!(*self[e], Term::Const(c2, _) if c == c2), "dest_binder: not the right binder");
+    self.dest_const(c, e);
     self.dest_lam(f)
   }
   fn dest_forall(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::FORALL, a) }
   fn dest_exists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::EXISTS, a) }
   fn dest_uexists(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::UEXISTS, a) }
   fn dest_select(&self, a: TermId) -> (VarId, TermId) { self.dest_binder(ConstId::SELECT, a) }
+
+  fn dest_unop(&self, c: ConstId, a: TermId) -> TermId {
+    let (f, x) = self.dest_app(a);
+    self.dest_const(c, f);
+    x
+  }
+  fn dest_bin(&self, c: ConstId, a: TermId) -> (TermId, TermId) {
+    let (f, y) = self.dest_app(a);
+    (self.dest_unop(c, f), y)
+  }
+  fn dest_conj(&self, a: TermId) -> (TermId, TermId) { self.dest_bin(ConstId::CONJ, a) }
+  fn dest_disj(&self, a: TermId) -> (TermId, TermId) { self.dest_bin(ConstId::DISJ, a) }
+  fn dest_imp(&self, a: TermId) -> (TermId, TermId) { self.dest_bin(ConstId::IMP, a) }
+  fn dest_eq(&self, a: TermId) -> (TermId, TermId) { self.dest_bin(ConstId::EQ, a) }
+  fn dest_pair(&self, a: TermId) -> (TermId, TermId) { self.dest_bin(ConstId::PAIR, a) }
+  fn dest_not(&self, a: TermId) -> TermId { self.dest_unop(ConstId::NOT, a) }
+
+  fn dest_int(&mut self, t: TermId) -> BigUint {
+    let mut t = self.dest_unop(ConstId::NUMERAL, t);
+    let mut out = BigUint::zero();
+    loop {
+      match *self[t] {
+        Term::Const(ConstId::ZERO, _) => return out,
+        Term::App(f, e) => {
+          match *self[f] {
+            Term::Const(ConstId::BIT0, _) => { out <<= 1 }
+            Term::Const(ConstId::BIT1, _) => { out <<= 1; out += 1u32 }
+            _ => panic!("dest_int: unexpected term"),
+          }
+          t = e;
+        }
+        _ => panic!("dest_int: unexpected term"),
+      }
+    }
+  }
 
   fn alpha_cmp(&self, a: TermId, b: TermId) -> Ordering {
     fn rec<T: HasTermStore + ?Sized>(this: &T,
@@ -372,6 +457,8 @@ pub struct TermArena<'a> {
   disj: Option<TermId>,
   imp: Option<TermId>,
   not: Option<TermId>,
+  tru: Option<TermId>,
+  fal: Option<TermId>,
 }
 macro_rules! get_term_cache { ($self:ident, $cache:ident, $c:ident, $ty:ident) => {
   if let Some(t) = $self.$cache { t } else {
@@ -404,7 +491,7 @@ impl<'a> TermArena<'a> {
     Self {
       tys: TypeArena::new(env),
       vars: Dedup::default(), tms: Dedup::default(),
-      conj: None, disj: None, imp: None, not: None,
+      conj: None, disj: None, imp: None, not: None, tru: None, fal: None,
     }
   }
 
@@ -485,6 +572,8 @@ impl<'a> TermArena<'a> {
   pub fn get_disj(&mut self) -> TermId { get_term_cache!(self, disj, DISJ, get_bool_binop) }
   pub fn get_imp(&mut self) -> TermId { get_term_cache!(self, imp, IMP, get_bool_binop) }
   pub fn get_not(&mut self) -> TermId { get_term_cache!(self, not, NOT, get_bool_unop) }
+  pub fn mk_true(&mut self) -> TermId { get_term_cache!(self, tru, TRUE, mk_bool) }
+  pub fn mk_false(&mut self) -> TermId { get_term_cache!(self, fal, FALSE, mk_bool) }
   pub fn mk_conj(&mut self, x: TermId, y: TermId) -> TermId { term!(self, A (self.get_conj()) x y) }
   pub fn mk_disj(&mut self, x: TermId, y: TermId) -> TermId { term!(self, A (self.get_disj()) x y) }
   pub fn mk_imp(&mut self, x: TermId, y: TermId) -> TermId { term!(self, A (self.get_imp()) x y) }
@@ -503,7 +592,7 @@ impl<'a> TermArena<'a> {
     let (tyx, tyy) = (self.type_of(x), self.type_of(y));
     term!(self, A (self.mk_pair_const(tyx, tyy)) x y)
   }
-  pub fn mk_bin(&mut self, b: Binary, x: TermId, y: TermId) -> TermId {
+  pub fn mk_binary(&mut self, b: Binary, x: TermId, y: TermId) -> TermId {
     match b {
       Binary::Conj => self.mk_conj(x, y),
       Binary::Disj => self.mk_disj(x, y),
@@ -549,8 +638,8 @@ impl<'a> TermArena<'a> {
     self.inst_type_store(inst, &tm.arena).2[tm.term.into_usize()]
   }
 
-  fn inst_type<R>(&mut self, store: &TermStore,
-    inst: &[TypeId], f: impl FnOnce(TermInstType<'a, '_>) -> R
+  fn inst_type<R, S: HasTermStore>(&mut self, store: &S,
+    inst: &[TypeId], f: impl FnOnce(TermInstType<'a, '_, S>) -> R
   ) -> R {
     let tys = &mut vec![None; store.types().len()];
     let vars = &mut vec![None; store.vars().len()];
@@ -558,7 +647,8 @@ impl<'a> TermArena<'a> {
     f(TermInstType { arena: self, store, inst, tys, tms, vars })
   }
 
-  fn import<R>(&mut self, store: &TermStore, f: impl FnOnce(TermInstType<'a, '_>) -> R) -> R {
+  fn import<R, S: HasTermStore>(&mut self, store: &S,
+    f: impl FnOnce(TermInstType<'a, '_, S>) -> R) -> R {
     self.inst_type(store, &[], f)
   }
 
@@ -581,21 +671,26 @@ impl<'a> TermArena<'a> {
   fn inst_term(&mut self, inst: &mut HashMap<VarId, TermId>, tm: TermId) -> TermId {
     if inst.is_empty() { tm } else { self.inst_term_simple(inst, tm) }
   }
+  fn inst_term_from(&mut self, inst: &[(VarId, TermId)], tm: TermId) -> TermId {
+    let mut map = HashMap::new();
+    for &(v, t) in inst { assert!(map.insert(v, t).is_none()) }
+    self.inst_term(&mut map, tm)
+  }
 }
 
-pub struct TermInstType<'a, 'b> {
+pub struct TermInstType<'a, 'b, S> {
   arena: &'b mut TermArena<'a>,
-  store: &'b TermStore,
+  store: &'b S,
   inst: &'b [TypeId],
   tys: &'b mut [Option<TypeId>],
   vars: &'b mut [Option<VarId>],
   tms: &'b mut [Option<TermId>],
 }
-impl<'a, 'b> TermInstType<'a, 'b> {
-  fn as_type(&mut self) -> TypeTranslator<'a, '_> {
+impl<'a, 'b, S: HasTermStore> TermInstType<'a, 'b, S> {
+  fn as_type(&mut self) -> TypeTranslator<'a, '_, S> {
     TypeTranslator {
       arena: self.arena,
-      store: &self.store.tys,
+      store: self.store,
       inst: self.inst,
       imported: self.tys,
     }
@@ -622,7 +717,7 @@ impl<'a, 'b> TermInstType<'a, 'b> {
         term!(self.arena, K(c, tyargs.iter().map(|&ty| trty.tr(ty)).collect()))
       }
       Term::App(f, x) => term!(self.arena, A (self.tr_term(f)) (self.tr_term(x))),
-      Term::Lam(x, e) => term!(self.arena, L (self.tr_var(x)) (self.tr_term(e))),
+      Term::Lam(x, e) => term!(self.arena, L {self.tr_var(x)} (self.tr_term(e))),
     };
     self.tms[tm.into_usize()] = Some(n);
     n
@@ -771,6 +866,15 @@ impl Hyps {
     Self(out.into())
   }
 
+  fn insert(&self, arena: &TermArena<'_>, tm: TermId) -> Option<Self> {
+    let i = self.0.binary_search_by(|&a| arena.alpha_cmp(a, tm)).err()?;
+    let mut out = Vec::with_capacity(self.0.len() + 1);
+    out.extend_from_slice(&self.0[..i]);
+    out.push(tm);
+    out.extend_from_slice(&self.0[i..]);
+    Some(Self(out.into()))
+  }
+
   fn remove(&self, arena: &TermArena<'_>, tm: TermId) -> Option<Self> {
     let i = self.0.binary_search_by(|&a| arena.alpha_cmp(a, tm)).ok()?;
     let mut out = Vec::with_capacity(self.0.len() - 1);
@@ -784,6 +888,8 @@ impl Hyps {
     vec.dedup_by(|&mut a, &mut b| arena.alpha_cmp(a, b).is_eq());
     Self(vec.into())
   }
+
+  fn one(tm: TermId) -> Self { Self(Box::new([tm])) }
 }
 
 #[derive(Debug, Default, Hash, PartialEq, Eq)]
@@ -861,8 +967,11 @@ impl<'a> ProofArena<'a> {
   pub fn into_store(self) -> ProofStore {
     ProofStore { tms: self.tms.into_store(), hyps: self.hyps.store, pfs: self.pfs.store }
   }
-  fn add(&mut self, th: Proof) -> ProofId {
-    self.pfs.add_val(th, ProofTrace)
+  fn add(&mut self, hyps: HypsId, concl: TermId) -> ProofId {
+    self.pfs.add_val(Proof {hyps, concl}, ProofTrace)
+  }
+  fn add0(&mut self, concl: TermId) -> ProofId {
+    self.add(HypsId::EMPTY, concl)
   }
 
   pub fn new(env: &'a Environment) -> Self {
@@ -881,6 +990,12 @@ impl<'a> ProofArena<'a> {
     let hyps = hyps1.union(&self.tms, hyps2);
     self.hyps.add(hyps)
   }
+  fn insert_hyp(&mut self, a: HypsId, tm: TermId) -> HypsId {
+    if let Some(hyps) = self[a].insert(&self.tms, tm) { self.hyps.add(hyps) } else { a }
+  }
+  fn remove_hyp(&mut self, a: HypsId, tm: TermId) -> HypsId {
+    if let Some(hyps) = self[a].remove(&self.tms, tm) { self.hyps.add(hyps) } else { a }
+  }
 
   fn hyps_from_vec(&mut self, vec: Vec<TermId>) -> HypsId {
     self.hyps.add(Hyps::from_vec(&self.tms, vec))
@@ -888,7 +1003,7 @@ impl<'a> ProofArena<'a> {
 
   pub fn axiom(&mut self, hyps: Vec<TermId>, concl: TermId) -> ProofId {
     let hyps = self.hyps_from_vec(hyps);
-    self.add(Proof { hyps, concl })
+    self.add(hyps, concl)
   }
 
   pub fn fetch(&mut self, th: ThmId, tys: Vec<TypeId>) -> ProofId {
@@ -898,177 +1013,425 @@ impl<'a> ProofArena<'a> {
     let hyps = d.hyps.iter().map(|&tm| {
       self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena[tm])
     }).collect();
-    let pr = Proof {
-      hyps: self.hyps_from_vec(hyps),
-      concl: self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena[d.concl])
-    };
-    self.add(pr)
+    let hyps = self.hyps_from_vec(hyps);
+    let concl = self.tms.subst_term_once(&trtys, &trvars, &trtms, &*d.arena[d.concl]);
+    self.add(hyps, concl)
   }
 
   pub fn add_asm(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    if let Some(hyps) = self[hyps].insert(&self.tms, tm) {
+      thm!(self, add(self.hyps.add(hyps), concl))
+    } else { th }
   }
   pub fn alpha(&mut self, tm1: TermId, tm2: TermId) -> ProofId {
-    self.add(todo!())
+    // TODO: assert tm1 =_a tm2
+    thm!(self, add0(tm1 = tm2))
   }
-  pub fn alpha_link(&mut self, th: ProofId, concl: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn alpha_link0(&mut self, th: ProofId, concl2: TermId) -> ProofId {
+    // TODO: assert th.concl =_a concl2
+    let Proof {hyps, concl: _} = *self[th];
+    assert_eq!(hyps, HypsId::EMPTY);
+    self.add0(concl2)
   }
   pub fn alpha_conv(&mut self, tm1: TermId, tm2: TermId) -> ProofId {
-    self.add(todo!())
+    let y = self.dest_var(tm1);
+    let (x, t) = self.dest_lam(tm2);
+    let t2 = self.inst_term_from(&[(x, tm1)], t);
+    thm!(self, add0(tm2 = (L y t2)))
   }
   pub fn assume(&mut self, tm: TermId) -> ProofId {
-    self.add(todo!())
+    assert!(self.is_boolean(tm));
+    let hyps = self.hyps.add(Hyps::one(tm));
+    self.add(hyps, tm)
   }
   pub fn beta(&mut self, tm: TermId) -> ProofId {
-    self.add(todo!())
+    let (t, s) = self.dest_app(tm);
+    let (x, t) = self.dest_lam(t);
+    let t2 = self.inst_term_from(&[(x, s)], t);
+    let th = term!(self, tm = t2); self.add0(th)
   }
   pub fn ccontr(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    self.dest_const(ConstId::FALSE, concl);
+    let neg = self.mk_not(tm);
+    thm!(self, add(self.remove_hyp(hyps, neg), tm))
   }
   pub fn choose(&mut self, tm: TermId, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (x, p) = self.dest_exists(th1);
+    let p2 = self.inst_term_from(&[(x, tm)], p);
+    let h2 = self.remove_hyp(h2, p2);
+    thm!(self, add(self.union_hyps(h1, h2), th2))
   }
   pub fn conj(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    thm!(self, add(self.union_hyps(h1, h2), {self.mk_conj(th1, th2)}))
   }
   pub fn conj1(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (a, _) = self.dest_conj(concl);
+    thm!(self, add(hyps, a))
   }
   pub fn conj2(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (_, b) = self.dest_conj(concl);
+    thm!(self, add(hyps, b))
   }
   pub fn contr(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    self.dest_const(ConstId::FALSE, concl);
+    assert!(self.is_boolean(tm));
+    thm!(self, add(hyps, tm))
   }
   pub fn deduct_antisym(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: p} = *self[th1];
+    let Proof {hyps: h2, concl: q} = *self[th2];
+    let h1 = self.remove_hyp(h1, q);
+    let h2 = self.remove_hyp(h2, p);
+    thm!(self, add(self.union_hyps(h1, h2), p = q))
   }
-  pub fn disch(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn disch(&mut self, p: TermId, th: ProofId) -> ProofId {
+    let Proof {hyps, concl: q} = *self[th];
+    thm!(self, add(self.remove_hyp(hyps, p), p => q))
   }
-  pub fn disj1(&mut self, th: ProofId, tm: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn disj1(&mut self, th: ProofId, q: TermId) -> ProofId {
+    let Proof {hyps, concl: p} = *self[th];
+    thm!(self, add(hyps, {self.mk_disj(p, q)}))
   }
-  pub fn disj2(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn disj2(&mut self, p: TermId, th: ProofId) -> ProofId {
+    let Proof {hyps, concl: q} = *self[th];
+    thm!(self, add(hyps, {self.mk_disj(p, q)}))
   }
   pub fn disj_cases(&mut self, th1: ProofId, th2: ProofId, th3: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th1];
+    let (p, q) = self.dest_disj(concl);
+    let Proof {hyps: h1, concl: r1} = *self[th2];
+    let Proof {hyps: h2, concl: r2} = *self[th3];
+    assert_eq!(r1, r2);
+    let h1 = self.remove_hyp(h1, p);
+    let h2 = self.remove_hyp(h2, q);
+    let h12 = self.union_hyps(h1, h2);
+    thm!(self, add(self.union_hyps(hyps, h12), r1))
   }
   pub fn eqf_elim(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, fal) = self.dest_eq(concl);
+    self.dest_const(ConstId::FALSE, fal);
+    thm!(self, add(hyps, {self.mk_not(p)}))
   }
   pub fn eqf_intro(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    thm!(self, add(hyps, {self.dest_not(concl)} = {self.mk_false()}))
   }
   pub fn eq_imp1(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, q) = self.dest_eq(concl);
+    thm!(self, add(hyps, p => q))
   }
   pub fn eq_imp2(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, q) = self.dest_eq(concl);
+    thm!(self, add(hyps, q => p))
   }
   pub fn eq_mp(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (p, q) = self.dest_eq(th1);
+    assert_eq!(p, th2);
+    thm!(self, add(self.union_hyps(h1, h2), q))
   }
   pub fn eqt_elim(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, tru) = self.dest_eq(concl);
+    self.dest_const(ConstId::TRUE, tru);
+    thm!(self, add(hyps, p))
   }
   pub fn eqt_intro(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    thm!(self, add(hyps, concl = {self.mk_true()}))
   }
   pub fn eta(&mut self, tm: TermId) -> ProofId {
-    self.add(todo!())
+    let (x, f) = self.dest_lam(tm);
+    let (f, x2) = self.dest_app(f);
+    assert_eq!(x, self.dest_var(x2));
+    thm!(self, add0(tm = f))
   }
-  pub fn exists(&mut self, tm1: TermId, tm2: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn exists(&mut self, tm: TermId, t: TermId, th: ProofId) -> ProofId {
+    let (x, p) = self.dest_exists(tm);
+    let Proof {hyps, concl} = *self[th];
+    assert_eq!(self.inst_term_from(&[(x, t)], p), concl);
+    thm!(self, add(hyps, tm))
   }
-  pub fn gen(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn gen(&mut self, x: VarId, th: ProofId) -> ProofId {
+    let Proof {hyps, concl} = *self[th];
+    thm!(self, add(hyps, {self.mk_forall(x, concl)}))
   }
   pub fn imp_antisym(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (p, q) = self.dest_imp(th1);
+    let (q2, p2) = self.dest_imp(th2);
+    assert_eq!((p, q), (p2, q2));
+    thm!(self, add(self.union_hyps(h1, h2), p = q))
   }
   pub fn imp_trans(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (p, q) = self.dest_imp(th1);
+    let (q2, r) = self.dest_imp(th2);
+    assert_eq!(q, q2);
+    thm!(self, add(self.union_hyps(h1, h2), p => r))
   }
-  pub fn inst(&mut self, inst: Vec<(TermId, TermId)>, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn inst(&mut self, inst: &[(VarId, TermId)], th: ProofId) -> ProofId {
+    let Proof {hyps, concl} = *self[th];
+    let hyps = if hyps == HypsId::EMPTY { hyps } else {
+      let hyps = self[hyps].clone().0.iter().map(|&h| self.inst_term_from(inst, h)).collect();
+      self.hyps_from_vec(hyps)
+    };
+    thm!(self, add(hyps, self.inst_term_from(inst, concl)))
   }
-  pub fn inst_type(&mut self, inst: Vec<(TypeId, TypeId)>, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn inst_type(&mut self, inst: &[(TyVarId, TypeId)], th: ProofId) -> ProofId {
+    let Proof {hyps, concl} = *self[th];
+    let mut a = ProofArena::new(self.env);
+    let mut hyps = Vec::from(&*self[hyps].0);
+    let concl = a.import(self, |mut tr| {
+      for h in &mut hyps { *h = tr.tr_term(*h) }
+      tr.tr_term(concl)
+    });
+    let a = a.into_store();
+    let n = inst.iter().map(|p| p.0 .0).max().map_or(0, |n| n+1);
+    let mut vec = (0..n).map(|v| self.tys.mk_var(TyVarId(v))).collect::<Vec<_>>();
+    for &(v, ty) in inst { vec[v.0 as usize] = ty };
+    let trtms = self.inst_type_store(&vec, &a.tms).2;
+    for h in &mut hyps { *h = trtms[h.into_usize()] }
+    thm!(self, add(self.hyps_from_vec(hyps), trtms[concl.into_usize()]))
   }
   pub fn mp(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (p, q) = self.dest_imp(th1);
+    assert_eq!(p, th2);
+    thm!(self, add(self.union_hyps(h1, h2), q))
   }
   pub fn not_elim(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    thm!(self, add(hyps, {self.dest_not(concl)} => {self.mk_false()}))
   }
   pub fn not_intro(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, fal) = self.dest_imp(concl);
+    self.dest_const(ConstId::FALSE, fal);
+    thm!(self, add(hyps, {self.mk_not(p)}))
   }
   pub fn prove_asm(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: p} = *self[th1];
+    let Proof {hyps: h2, concl: q} = *self[th2];
+    let h2 = self.remove_hyp(h2, p);
+    thm!(self, add(self.union_hyps(h1, h2), q))
   }
   pub fn refl(&mut self, tm: TermId) -> ProofId {
-    self.add(todo!())
+    thm!(self, add0(tm = tm))
   }
   pub fn select_rule(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (x, p) = self.dest_exists(concl);
+    let sel = self.mk_select(x, p);
+    thm!(self, add(hyps, self.inst_term_from(&[(x, sel)], p)))
   }
   pub fn spec(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (x, p) = self.dest_forall(concl);
+    thm!(self, add(hyps, self.inst_term_from(&[(x, tm)], p)))
   }
-  pub fn subs(&mut self, ths: Vec<ProofId>, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn subs_conv(&mut self, ths: &[ProofId], th: TermId) -> ProofId {
+    self.add0(todo!())
   }
-  pub fn subs_conv(&mut self, ths: Vec<ProofId>, th: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn subs(&mut self, ths: &[ProofId], th: ProofId) -> ProofId {
+    let th1 = self.subs_conv(ths, self[th].concl);
+    self.eq_mp(th1, th)
   }
-  pub fn subst(&mut self, tmths: Vec<(TermId, ProofId)>, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn subst_conv(&mut self, vths: &HashMap<VarId, ProofId>, tmp: TermId, tm: TermId
+  ) -> ProofId {
+    self.add0(todo!())
   }
-  pub fn subst_conv(&mut self, tmths: Vec<(TermId, ProofId)>, tm1: TermId, tm2: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn subst(&mut self, vths: &HashMap<VarId, ProofId>, tmp: TermId, th: ProofId
+  ) -> ProofId {
+    let th1 = self.subst_conv(vths, tmp, self[th].concl);
+    self.eq_mp(th1, th)
   }
   pub fn sym(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (t1, t2) = self.dest_eq(concl);
+    thm!(self, add(hyps, t2 = t1))
   }
   pub fn sym_conv(&mut self, tm: TermId) -> ProofId {
-    self.add(todo!())
+    let (t1, t2) = self.dest_eq(tm);
+    thm!(self, add0((t1 = t2) = (t2 = t1)))
   }
   pub fn trans(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (a, b) = self.dest_eq(th1);
+    let (b2, c) = self.dest_eq(th2);
+    assert_eq!(b, b2);
+    thm!(self, add(self.union_hyps(h1, h2), a = c))
   }
   pub fn undisch(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+    let Proof {hyps, concl} = *self[th];
+    let (p, q) = self.dest_imp(concl);
+    thm!(self, add(self.insert_hyp(hyps, p), q))
   }
-  pub fn mk_quant(&mut self, q: Quant, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  #[inline] fn mk_eq_fn1(&mut self, th: ProofId,
+    mut f: impl FnMut(&mut Self, TermId) -> TermId
+  ) -> ProofId {
+    let Proof {hyps, concl} = *self[th];
+    let (l, r) = self.dest_eq(concl);
+    thm!(self, add(hyps, {f(self, l)} = {f(self, r)}))
   }
-  pub fn mk_app(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+  #[inline] fn mk_eq_fn2(&mut self, th1: ProofId, th2: ProofId,
+    mut f: impl FnMut(&mut Self, TermId, TermId) -> TermId
+  ) -> ProofId {
+    let Proof {hyps: h1, concl: th1} = *self[th1];
+    let Proof {hyps: h2, concl: th2} = *self[th2];
+    let (l1, r1) = self.dest_eq(th1);
+    let (l2, r2) = self.dest_eq(th2);
+    thm!(self, add(self.union_hyps(h1, h2), {f(self, l1, l2)} = {f(self, r1, r2)}))
   }
-  pub fn mk_app1(&mut self, th: ProofId, tm: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_lam(&mut self, x: VarId, th: ProofId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_lam(x, t))
   }
-  pub fn mk_app2(&mut self, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_binder(&mut self, b: ConstId, x: VarId, th: ProofId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_binder(b, x, t))
   }
-  pub fn mk_bin(&mut self, op: Binary, th1: ProofId, th2: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_forall(&mut self, x: VarId, th: ProofId) -> ProofId { self.eq_binder(ConstId::FORALL, x, th) }
+  pub fn eq_exists(&mut self, x: VarId, th: ProofId) -> ProofId { self.eq_binder(ConstId::EXISTS, x, th) }
+  pub fn eq_uexists(&mut self, x: VarId, th: ProofId) -> ProofId { self.eq_binder(ConstId::UEXISTS, x, th) }
+  pub fn eq_select(&mut self, x: VarId, th: ProofId) -> ProofId { self.eq_binder(ConstId::SELECT, x, th) }
+  pub fn eq_quant(&mut self, q: Quant, x: VarId, th: ProofId) -> ProofId {
+    match q {
+      Quant::Lambda => self.eq_lam(x, th),
+      Quant::Forall => self.eq_forall(x, th),
+      Quant::Exists => self.eq_exists(x, th),
+      Quant::UExists => self.eq_uexists(x, th),
+      Quant::Select => self.eq_select(x, th),
+    }
   }
-  pub fn mk_bin1(&mut self, op: Binary, th: ProofId, tm: TermId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_app(&mut self, th1: ProofId, th2: ProofId) -> ProofId {
+    self.mk_eq_fn2(th1, th2, |this, t1, t2| this.mk_app(t1, t2))
   }
-  pub fn mk_bin2(&mut self, op: Binary, tm: TermId, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_app1(&mut self, th: ProofId, tm: TermId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_app(t, tm))
   }
-  pub fn mk_not(&mut self, th: ProofId) -> ProofId {
-    self.add(todo!())
+  pub fn eq_app2(&mut self, tm: TermId, th: ProofId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_app(tm, t))
+  }
+  pub fn eq_bin(&mut self, f: TermId, th1: ProofId, th2: ProofId) -> ProofId {
+    self.mk_eq_fn2(th1, th2, |this, t1, t2| this.mk_app2(f, t1, t2))
+  }
+  pub fn eq_bin1(&mut self, f: TermId, th: ProofId, tm: TermId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_app2(f, t, tm))
+  }
+  pub fn eq_bin2(&mut self, f: TermId, tm: TermId, th: ProofId) -> ProofId {
+    self.mk_eq_fn1(th, |this, t| this.mk_app2(f, tm, t))
+  }
+  pub fn eq_binary(&mut self, b: Binary, x: ProofId, y: ProofId) -> ProofId {
+    self.mk_eq_fn2(x, y, |this, x, y| this.mk_binary(b, x, y))
+  }
+  pub fn eq_binary1(&mut self, b: Binary, x: ProofId, y: TermId) -> ProofId {
+    self.mk_eq_fn1(x, |this, x| this.mk_binary(b, x, y))
+  }
+  pub fn eq_binary2(&mut self, b: Binary, x: TermId, y: ProofId) -> ProofId {
+    self.mk_eq_fn1(y, |this, y| this.mk_binary(b, x, y))
+  }
+  pub fn eq_not(&mut self, th: ProofId) -> ProofId {
+    self.mk_eq_fn1(th, |this, x| this.mk_not(x))
   }
   pub fn mk_num_conv(&mut self, op: NumOp, tm: TermId) -> ProofId {
-    self.add(todo!())
+    match op {
+      NumOp::Suc => {
+        let n = self.dest_unop(ConstId::SUC, tm);
+        let mut n = self.dest_int(n);
+        n += 1u32;
+        thm!(self, add0(tm = {self.mk_int(n)}))
+      }
+      NumOp::Pre => {
+        let n = self.dest_unop(ConstId::PRE, tm);
+        let mut n = self.dest_int(n);
+        if !n.is_zero() { n -= 1u32 }
+        thm!(self, add0(tm = {self.mk_int(n)}))
+      }
+      NumOp::Add => {
+        let (a, b) = self.dest_bin(ConstId::ADD, tm);
+        let mut a = self.dest_int(a);
+        let b = self.dest_int(b);
+        a += b;
+        thm!(self, add0(tm = {self.mk_int(a)}))
+      }
+      NumOp::Sub => {
+        let (a, b) = self.dest_bin(ConstId::SUB, tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        let c = a.checked_sub(&b).unwrap_or_else(BigUint::zero);
+        thm!(self, add0(tm = {self.mk_int(c)}))
+      }
+      NumOp::Mult => {
+        let (a, b) = self.dest_bin(ConstId::MULT, tm);
+        let mut a = self.dest_int(a);
+        let b = self.dest_int(b);
+        a *= b;
+        thm!(self, add0(tm = {self.mk_int(a)}))
+      }
+      NumOp::Exp => {
+        let (a, b) = self.dest_bin(ConstId::EXP, tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        let c = a.pow(b.try_into().expect("eval_exp_conv: too big"));
+        thm!(self, add0(tm = {self.mk_int(c)}))
+      }
+      NumOp::Even => {
+        let n = self.dest_unop(ConstId::EVEN, tm);
+        let n = self.dest_int(n);
+        thm!(self, add0(tm = { if n.bit(0) {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Odd => {
+        let n = self.dest_unop(ConstId::ODD, tm);
+        let n = self.dest_int(n);
+        thm!(self, add0(tm = { if n.bit(0) {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Eq => {
+        let (a, b) = self.dest_eq(tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        thm!(self, add0(tm = { if a == b {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Lt => {
+        let (a, b) = self.dest_eq(tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        thm!(self, add0(tm = { if a < b {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Le => {
+        let (a, b) = self.dest_eq(tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        thm!(self, add0(tm = { if a <= b {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Gt => {
+        let (a, b) = self.dest_eq(tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        thm!(self, add0(tm = { if a > b {self.mk_true()} else {self.mk_false()} }))
+      }
+      NumOp::Ge => {
+        let (a, b) = self.dest_eq(tm);
+        let a = self.dest_int(a);
+        let b = self.dest_int(b);
+        thm!(self, add0(tm = { if a >= b {self.mk_true()} else {self.mk_false()} }))
+      }
+    }
   }
 }
 
@@ -1250,7 +1613,7 @@ impl Environment {
       let (_, va) = t.mk_var_term("a", t.dest_fun(t.type_of(abs)).1);
       // a: C |- abs (rep a) = a
       let concl = term!(t, (A abs (A rep va)) = va);
-      a.add(Proof { hyps: HypsId::EMPTY, concl })
+      a.add0(concl)
     });
     let abs_rep = self.add_thm(FetchKind::TypeBij1, cname, abs_rep);
     let store = &self.thms[exists_p.into_usize()].arena;
@@ -1262,7 +1625,7 @@ impl Environment {
       let (_, vr) = t.mk_var_term("r", t.dest_fun(t.type_of(abs)).0);
       // r: A |- P r <=> rep (abs r) = r
       let concl = term!(t, (A p vr) = ((A rep (A abs vr)) = vr));
-      a.add(Proof { hyps: HypsId::EMPTY, concl })
+      a.add0(concl)
     });
     let rep_abs = self.add_thm(FetchKind::TypeBij2, cname, rep_abs);
     (absc, repc, abs_rep, rep_abs)
@@ -1286,7 +1649,7 @@ impl Environment {
   }
 
   pub fn add_spec<'a, T: Borrow<str>>(&mut self,
-    xs: &[T], ThmDef {arena, hyps, concl, ..}: ThmDef) -> ThmId {
+    xs: &[T], ThmDef {arena, hyps, concl, ..}: ThmDef) -> (Vec<ConstId>, ThmId) {
     assert!(hyps.is_empty());
     let mut term = concl;
     let mut subst = vec![];
@@ -1313,11 +1676,11 @@ impl Environment {
       a.axiom(vec![], concl)
     }).0);
     for x in xs { self.add_thm_alias(FetchKind::Spec, x.borrow(), n) }
-    n
+    (subst.into_iter().map(|p| p.1).collect(), n)
   }
 
   pub fn add_axiom(&mut self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
-    assert!(matches!(*arena[arena.type_of(term)], Type::Const(TyopId::BOOL, _)));
+    assert!(arena.is_boolean(term));
     self.add_thm(FetchKind::Axiom, x, ThmDef {arena, tyvars, hyps: Box::new([]), concl: term})
   }
 }

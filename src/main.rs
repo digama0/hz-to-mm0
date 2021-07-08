@@ -1,4 +1,3 @@
-#![allow(unused)]
 mod lexer;
 mod parser;
 pub mod kernel;

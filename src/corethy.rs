@@ -8,20 +8,34 @@ impl TyopId {
 }
 
 impl ConstId {
-  pub const CONJ: Self = Self(0); // FIXME
-  pub const DISJ: Self = Self(0); // FIXME
-  pub const IMP: Self = Self(0); // FIXME
-  pub const NOT: Self = Self(0); // FIXME
   pub const EQ: Self = Self(0); // FIXME
-  pub const PAIR: Self = Self(0); // FIXME
+  pub const TRUE: Self = Self(0); // FIXME
+  pub const CONJ: Self = Self(0); // FIXME
+  pub const IMP: Self = Self(0); // FIXME
   pub const FORALL: Self = Self(0); // FIXME
   pub const EXISTS: Self = Self(0); // FIXME
+  pub const DISJ: Self = Self(0); // FIXME
+  pub const FALSE: Self = Self(0); // FIXME
+  pub const NOT: Self = Self(0); // FIXME
   pub const UEXISTS: Self = Self(0); // FIXME
   pub const SELECT: Self = Self(0); // FIXME
-  pub const NUMERAL: Self = Self(0); // FIXME
+  pub const PAIR: Self = Self(0); // FIXME
   pub const ZERO: Self = Self(0); // FIXME
+  pub const SUC: Self = Self(0); // FIXME
+  pub const NUMERAL: Self = Self(0); // FIXME
   pub const BIT0: Self = Self(0); // FIXME
   pub const BIT1: Self = Self(0); // FIXME
+  pub const PRE: Self = Self(0); // FIXME
+  pub const ADD: Self = Self(0); // FIXME
+  pub const MULT: Self = Self(0); // FIXME
+  pub const EXP: Self = Self(0); // FIXME
+  pub const LE: Self = Self(0); // FIXME
+  pub const LT: Self = Self(0); // FIXME
+  pub const GE: Self = Self(0); // FIXME
+  pub const GT: Self = Self(0); // FIXME
+  pub const EVEN: Self = Self(0); // FIXME
+  pub const ODD: Self = Self(0); // FIXME
+  pub const SUB: Self = Self(0); // FIXME
 }
 
 impl Environment {
@@ -43,37 +57,40 @@ impl Environment {
     let vy = "V \"y\" z2";
     let vn = "V \"n\" z1";
     let suc = "K \"SUC\"";
-    env.parse_const("=", &[a_ty], "F z1 (F z1 (K \"bool\"))");
+    assert_eq!(ConstId::EQ, env.parse_const("=", &[a_ty], "F z1 (F z1 (K \"bool\"))"));
     // T = ((\p:bool. p) = (\p:bool. p))
-    env.parse_basic_def("T", &[bool_ty], &[p_tm, "L t1 t1"], "E t2 t2");
+    assert_eq!(ConstId::TRUE, env.parse_basic_def("T", &[bool_ty],
+      &[p_tm, "L t1 t1"], "E t2 t2").0);
     // (/\) = \p q. (\f:bool->bool->bool. f p q) = (\f. f T T)
-    env.parse_basic_def("/\\", &[bool_ty, "F z1 (F z1 z1)"],
+    assert_eq!(ConstId::CONJ, env.parse_basic_def("/\\", &[bool_ty, "F z1 (F z1 z1)"],
       &[p_tm, q_tm, "V \"f\" z2", "K \"T\""],
-      "L t1 (L t2 (E (L t3 (B t3 t1 t2)) (L t3 (B t3 t4 t4))))");
+      "L t1 (L t2 (E (L t3 (B t3 t1 t2)) (L t3 (B t3 t4 t4))))").0);
     // (==>) = \p q. p /\ q <=> p
-    env.parse_basic_def("==>", &[bool_ty], &[p_tm, q_tm], "L t1 (L t2 (E (C t1 t2) t1))");
+    assert_eq!(ConstId::IMP, env.parse_basic_def("==>", &[bool_ty], &[p_tm, q_tm],
+      "L t1 (L t2 (E (C t1 t2) t1))").0);
     // (!) = \P:A->bool. P = \x. T
-    env.parse_basic_def("!", &[a_ty, "F z1 (K \"bool\")"], &["V \"P\" z2"],
-      "L t1 (E t1 (L (V \"x\" z1) (K \"T\")))");
+    assert_eq!(ConstId::FORALL, env.parse_basic_def("!", &[a_ty, "F z1 (K \"bool\")"],
+      &["V \"P\" z2"], "L t1 (E t1 (L (V \"x\" z1) (K \"T\")))").0);
     // (?) = \P:A->bool. !q. (!x. P x ==> q) ==> q
-    env.parse_basic_def("?", &[bool_ty, a_ty, "F z2 z1"],
+    assert_eq!(ConstId::EXISTS, env.parse_basic_def("?", &[bool_ty, a_ty, "F z2 z1"],
       &["V \"P\" z3", q_tm, "V \"x\" z2"],
-      r#"L t1 (U t2 (I (U t3 (I (A t1 t3) t2)) t2))"#);
+      r#"L t1 (U t2 (I (U t3 (I (A t1 t3) t2)) t2))"#).0);
     // (\/) = \p q. !r. (p ==> r) ==> (q ==> r) ==> r
-    env.parse_basic_def("\\/", &[bool_ty], &[p_tm, q_tm, r_tm],
-      "L t1 (L t2 (U t3 (I (I t1 t3) (I (I t2 t3) t3))))");
+    assert_eq!(ConstId::DISJ, env.parse_basic_def("\\/", &[bool_ty], &[p_tm, q_tm, r_tm],
+      "L t1 (L t2 (U t3 (I (I t1 t3) (I (I t2 t3) t3))))").0);
     // F = !p:bool. p
-    env.parse_basic_def("F", &[bool_ty], &[p_tm], "U t1 t1");
+    assert_eq!(ConstId::FALSE, env.parse_basic_def("F", &[bool_ty], &[p_tm], "U t1 t1").0);
     // (~) = \p. p ==> F
-    env.parse_basic_def("~", &[bool_ty], &[p_tm], "L t1 (I t1 (K \"F\"))");
+    assert_eq!(ConstId::NOT, env.parse_basic_def("~", &[bool_ty], &[p_tm],
+      "L t1 (I t1 (K \"F\"))").0);
     // (?!) = \P:A->bool. (?) P /\ (!x y. P x /\ P y ==> x = y)
-    env.parse_basic_def("?!", &[a_ty, "F z1 (K \"bool\")"],
+    assert_eq!(ConstId::UEXISTS, env.parse_basic_def("?!", &[a_ty, "F z1 (K \"bool\")"],
       &["V \"P\" z2", vx, "V \"y\" z1"],
-      r#"L t1 (C (A (K "?" z1) t1) (U t2 (U t3 (I (C (A t1 t2) (A t1 t3)) (E t2 t3)))))"#);
+      r#"L t1 (C (A (K "?" z1) t1) (U t2 (U t3 (I (C (A t1 t2) (A t1 t3)) (E t2 t3)))))"#).0);
     // !t:A->B. (\x. t x) = t
     env.parse_thm(Axiom, "ETA_AX", &[a_ty, b_ty, "F z1 z2"], &["V \"t\" z3", "V \"x\" z1"],
       &[], "U t1 (E (L t2 (A t1 t2)) t1)");
-    env.parse_const("@", &[a_ty], "F (F z1 (K \"bool\")) z1");
+    assert_eq!(ConstId::SELECT, env.parse_const("@", &[a_ty], "F (F z1 (K \"bool\")) z1"));
     // !P (x:A). P x ==> P ((@) P)
     env.parse_thm(Axiom, "SELECT_AX", &[a_ty, bool_ty, "F z1 z2"],
       &["V \"P\" z3", "V \"x\" z1"],
@@ -86,12 +103,12 @@ impl Environment {
     // mk_pair = \(x:A) (y:B) a b. (a = x) /\ (b = y)
     env.parse_basic_def("mk_pair", &[a_ty, b_ty], &[vx, vy, "V \"a\" z1", "V \"b\" z2"],
       "L t1 (L t2 (L t3 (L t4 (C (E t3 t1) (E t4 t2)))))");
-    let prod = env.parse_basic_typedef("prod", &["K \"ind\""], &["V \"k\" z1"],
-      "E t1 (A (K \"NUM_REP\") t1)");
-    env.add_type_bijs(prod, "prod", "ABS_prod", "REP_prod");
+    assert_eq!(TyopId::PROD, env.parse_basic_typedef("prod", &["K \"ind\""], &["V \"k\" z1"],
+      "E t1 (A (K \"NUM_REP\") t1)"));
+    env.add_type_bijs(TyopId::PROD, "prod", "ABS_prod", "REP_prod");
     // (,) = \(x:A) (y:B). ABS_prod(mk_pair x y)
-    env.parse_basic_def(",", &[a_ty, b_ty], &[vx, vy],
-      r#"L t1 (L t2 (A (K "ABS_prod" z1 z2) (B (K "mk_pair" z1 z2) t1 t2)))"#);
+    assert_eq!(ConstId::PAIR, env.parse_basic_def(",", &[a_ty, b_ty], &[vx, vy],
+      r#"L t1 (L t2 (A (K "ABS_prod" z1 z2) (B (K "mk_pair" z1 z2) t1 t2)))"#).0);
     // FST = \p:A#B. @x. ?y. p = x,y
     env.parse_basic_def("FST", &[a_ty, b_ty, "K \"prod\" z1 z2"], &["V \"p\" z3", vx, vy],
       "L t1 (S t2 (X t3 (E t1 (P t2 t3))))");
@@ -133,8 +150,8 @@ impl Environment {
     assert_eq!(ConstId::ZERO, env.parse_def("_0", 0,
       &[], &[], "A (K \"mk_num\") (K \"IND_0\")").0);
     // !n. SUC n = mk_num (IND_SUC (dest_num n))
-    env.parse_def("SUC", 1, &[num_ty], &[vn],
-      r#"L t1 (A (K "mk_num") (A (K "IND_SUC") (A (K "dest_num") t1)))"#);
+    assert_eq!(ConstId::SUC, env.parse_def("SUC", 1, &[num_ty], &[vn],
+      r#"L t1 (A (K "mk_num") (A (K "IND_SUC") (A (K "dest_num") t1)))"#).0);
     // !n. NUMERAL n = n
     assert_eq!(ConstId::NUMERAL, env.parse_def("NUMERAL", 1, &[num_ty], &[vn], "L t1 t1").0);
     // BIT0 = @fn. fn 0 = 0 /\ (!n. fn (SUC n) = SUC (SUC (fn n)))
@@ -145,52 +162,62 @@ impl Environment {
     assert_eq!(ConstId::BIT1, env.parse_def("BIT1", 1,
       &[num_ty], &[vn], "L t1 (A (K \"SUC\") (A (K \"BIT0\") t1))").0);
     // PRE 0 = 0 /\ (!n. PRE (SUC n) = n))
-    let pre = env.parse_spec(&["PRE"], &[num_ty], &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
+    let ([c], pre) = env.parse_spec(&["PRE"], &[num_ty],
+      &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
+    assert_eq!(c, ConstId::PRE);
     // (!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))
-    let add = env.parse_spec(&["+"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], add) = env.parse_spec(&["+"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"+\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t5 (E (B t1 t2 t5) t5)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (A t3 (B t1 t4 t5))))))");
+    assert_eq!(c, ConstId::ADD);
     // (!n. 0 * n = 0) /\ (!m n. SUC m * n = m * n + n)
-    env.parse_spec(&["*"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], _) = env.parse_spec(&["*"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"*\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t5 (E (B t1 t2 t5) t2)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (B (K \"+\") (B t1 t4 t5) t5)))))");
+    assert_eq!(c, ConstId::MULT);
     // (!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)
-    let exp = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], exp) = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"EXP\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t2 t4) (M 1))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (B (K \"*\") t4 (B t1 t4 t5))))))");
+    assert_eq!(c, ConstId::EXP);
     // (!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)
-    env.parse_spec(&["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+    let ([c], _) = env.parse_spec(&["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<=\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t4 t2) (E t4 t2))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 (A t3 t4)) (B t1 t4 t5))))))");
+    assert_eq!(c, ConstId::LE);
     // (!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)
-    let lt = env.parse_spec(&["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+    let ([c], lt) = env.parse_spec(&["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t4 t2) (K \"F\"))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 t5) (B t1 t4 t5))))))");
+    assert_eq!(c, ConstId::LT);
     // !m n. m >= n <=> n <= m
-    env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
-      "L t1 (L t2 (B (K \"<=\") t2 t1))");
+    assert_eq!(ConstId::GE, env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      "L t1 (L t2 (B (K \"<=\") t2 t1))").0);
     // !m n. m > n <=> n < m
-    env.parse_def(">=", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
-      "L t1 (L t2 (B (K \"<\") t2 t1))");
+    assert_eq!(ConstId::GT, env.parse_def(">", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+      "L t1 (L t2 (B (K \"<\") t2 t1))").0);
     // (EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)
-    let even = env.parse_spec(&["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
+    let ([c], even) = env.parse_spec(&["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"EVEN\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) (K \"T\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+    assert_eq!(c, ConstId::EVEN);
     // (ODD 0 <=> F) /\ (!n. ODD (SUC n) <=> ~ODD n)
-    env.parse_spec(&["ODD"], &[num_ty, "F z1 (K \"bool\")"],
+    let ([c], _) = env.parse_spec(&["ODD"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"ODD\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) (K \"F\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
+    assert_eq!(c, ConstId::ODD);
     // (!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))
-    let sub = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], sub) = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"-\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1", "K \"PRE\""],
       "X t1 (C (U t4 (E (B t1 t2 t4) t2)) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (A t6 (B t1 t4 t5))))))");
+    assert_eq!(c, ConstId::SUB);
     // TYPE_DEFINITION = \(P:A->bool) (rep:B->A). ONE_ONE rep /\ (!x:A. P x <=> (?y:B. x = rep y))
     env.parse_basic_def("TYPE_DEFINITION", &[a_ty, b_ty, bool_ty, "F z1 z3", "F z2 z1"],
       &["V \"P\" z4", "V \"rep\" z5", "V \"x\" z1", "V \"y\" z2"],

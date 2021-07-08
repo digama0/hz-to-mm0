@@ -1,5 +1,6 @@
 #![allow(clippy::eval_order_dependence)]
 
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 use std::io::Read;
@@ -7,7 +8,7 @@ use std::io::Read;
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
 use crate::kernel::{Environment, OwnedTerm, OwnedType,
-  ProofArena, TermArena, TypeArena, TypedefInfo, HasTermStore};
+  ProofArena, TermArena, TypeArena, TypedefInfo, HasTypeStore, HasTermStore};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -449,7 +450,7 @@ impl<'a> TermArena<'a> {
           Some(Stack::Binop1(o, tm1)) => State::Ret(match o {
             Binop::App => self.mk_app(tm1, tm),
             Binop::Quant(q) => self.mk_quant(q, self.dest_var(tm1), tm),
-            Binop::Bin(b) => self.mk_bin(b, tm1, tm),
+            Binop::Bin(b) => self.mk_binary(b, tm1, tm),
           }),
           None => {
             parse! { lexer, tk; Eols, }
@@ -538,18 +539,18 @@ impl<'a> ProofArena<'a> {
       EqtElim,
       EqtIntro,
       Exists(TermId, TermId),
-      Gen(TermId),
-      Inst(Vec<(TermId, TermId)>),
-      InstType(Vec<(TypeId, TypeId)>),
+      Gen(VarId),
+      Inst(Vec<(VarId, TermId)>),
+      InstType(Vec<(TyVarId, TypeId)>),
       NotElim,
       NotIntro,
       SelectRule,
       Spec(TermId),
       Subs(Vec<ProofId>),
-      Subst(Vec<(TermId, ProofId)>, TermId),
+      Subst(HashMap<VarId, ProofId>, TermId),
       Sym,
       Undisch,
-      Quant(Quant, TermId),
+      Quant(Quant, VarId),
       App1,
       App2(TermId),
       Bin1(self::Binary),
@@ -562,21 +563,21 @@ impl<'a> ProofArena<'a> {
       SubsConv,
     }
     #[derive(Debug)]
-    enum TermThmList {
+    enum VarThmList {
       Subst,
       SubstConv,
     }
     #[derive(Debug)]
     enum List {
       Thm(ThmList),
-      TermThm(TermThmList),
+      VarThm(VarThmList),
     }
     #[derive(Debug)]
     enum Stack {
       Paren,
       Unary(Unary),
       ThmList(ThmList, Vec<ProofId>),
-      TermThmList(TermThmList, Vec<(TermId, ProofId)>, TermId),
+      VarThmList(VarThmList, HashMap<VarId, ProofId>, VarId),
     }
     #[derive(Debug)]
     enum State {
@@ -584,21 +585,23 @@ impl<'a> ProofArena<'a> {
       Ret(ProofId),
       ListStart(List),
       ThmListEnd(ThmList, Vec<ProofId>),
-      TermThmListEnd(TermThmList, Vec<(TermId, ProofId)>),
+      VarThmListEnd(VarThmList, HashMap<VarId, ProofId>),
     }
 
     let mut stk = vec![];
     let mut tk = lexer.unpack(*ptk);
     macro_rules! next {() => {tk = lexer.next()}}
     macro_rules! term {() => {{ parse! { lexer, tk; let tm = TTerm(v) => tms[v as usize], } tm }}}
+    macro_rules! var {() => { self.dest_var(term!()) }}
     macro_rules! ty {() => {{ parse! { lexer, tk; let ty = TType(v) => tys[v as usize], } ty }}}
-    macro_rules! list {($m:ident !) => {{
+    macro_rules! tyvar {() => { self.dest_tyvar(ty!()) }}
+    macro_rules! list {($m:ident!, $n:ident!) => {{
       parse! { lexer, tk; Char('['), }
       let mut args = vec![];
       if !matches!(tk, Some(Char(']'))) {
         loop {
           let a = $m!(); parse! { lexer, tk; Char(','), }
-          let b = $m!(); parse! { lexer, tk; let next = Opt(Char(';')), }
+          let b = $n!(); parse! { lexer, tk; let next = Opt(Char(';')), }
           args.push((a, b));
           if !next { break }
         }
@@ -639,11 +642,11 @@ impl<'a> ProofArena<'a> {
           Ident("TI") => { next!(); stk.push(Stack::Unary(Unary::EqtIntro)); State::Start }
           Ident("EC") => { next!(); State::Ret(self.eta(term!())) }
           Ident("X") => { next!(); stk.push(Stack::Unary(Unary::Exists(term!(), term!()))); State::Start }
-          Ident("G") => { next!(); stk.push(Stack::Unary(Unary::Gen(term!()))); State::Start }
+          Ident("G") => { next!(); stk.push(Stack::Unary(Unary::Gen(var!()))); State::Start }
           Ident("EI") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::ImpAntiSym))); State::Start }
           Ident("IT") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::ImpTrans))); State::Start }
-          Ident("I") => { next!(); stk.push(Stack::Unary(Unary::Inst(list!(term!)))); State::Start }
-          Ident("J") => { next!(); stk.push(Stack::Unary(Unary::InstType(list!(ty!)))); State::Start }
+          Ident("I") => { next!(); stk.push(Stack::Unary(Unary::Inst(list!(var!, term!)))); State::Start }
+          Ident("J") => { next!(); stk.push(Stack::Unary(Unary::InstType(list!(tyvar!, ty!)))); State::Start }
           Ident("M") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::Mp))); State::Start }
           Ident("NE") => { next!(); stk.push(Stack::Unary(Unary::NotElim)); State::Start }
           Ident("NI") => { next!(); stk.push(Stack::Unary(Unary::NotIntro)); State::Start }
@@ -653,13 +656,13 @@ impl<'a> ProofArena<'a> {
           Ident("S") => { next!(); stk.push(Stack::Unary(Unary::Spec(term!()))); State::Start }
           Ident("SB") => { next!(); State::ListStart(List::Thm(ThmList::Subs)) }
           Ident("SBC") => { next!(); State::ListStart(List::Thm(ThmList::SubsConv)) }
-          Ident("ST") => { next!(); State::ListStart(List::TermThm(TermThmList::Subst)) }
-          Ident("STC") => { next!(); State::ListStart(List::TermThm(TermThmList::SubstConv)) }
+          Ident("ST") => { next!(); State::ListStart(List::VarThm(VarThmList::Subst)) }
+          Ident("STC") => { next!(); State::ListStart(List::VarThm(VarThmList::SubstConv)) }
           Ident("Y") => { next!(); stk.push(Stack::Unary(Unary::Sym)); State::Start }
           Ident("YC") => { next!(); State::Ret(self.sym_conv(term!())) }
           Ident("T") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::Trans))); State::Start }
           Ident("U") => { next!(); stk.push(Stack::Unary(Unary::Undisch)); State::Start }
-          Ident("ML") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Lambda, term!()))); State::Start }
+          Ident("ML") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Lambda, var!()))); State::Start }
           Ident("MA") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::App))); State::Start }
           Ident("MA1") => { next!(); stk.push(Stack::Unary(Unary::App1)); State::Start }
           Ident("MA2") => { next!(); stk.push(Stack::Unary(Unary::App2(term!()))); State::Start }
@@ -678,14 +681,14 @@ impl<'a> ProofArena<'a> {
           Ident("MP") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::Bin(self::Binary::Pair)))); State::Start }
           Ident("MP1") => { next!(); stk.push(Stack::Unary(Unary::Bin1(self::Binary::Pair))); State::Start }
           Ident("MP2") => { next!(); stk.push(Stack::Unary(Unary::Bin2(self::Binary::Pair, term!()))); State::Start }
-          Ident("MX") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Exists, term!()))); State::Start }
-          Ident("MUX") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::UExists, term!()))); State::Start }
-          Ident("MU") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Forall, term!()))); State::Start }
+          Ident("MX") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Exists, var!()))); State::Start }
+          Ident("MUX") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::UExists, var!()))); State::Start }
+          Ident("MU") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Forall, var!()))); State::Start }
           Ident("MI") => { next!(); stk.push(Stack::Unary(Unary::Binary(Binary::Bin(self::Binary::Imp)))); State::Start }
           Ident("MI1") => { next!(); stk.push(Stack::Unary(Unary::Bin1(self::Binary::Imp))); State::Start }
           Ident("MI2") => { next!(); stk.push(Stack::Unary(Unary::Bin2(self::Binary::Imp, term!()))); State::Start }
           Ident("MN") => { next!(); stk.push(Stack::Unary(Unary::Not)); State::Start }
-          Ident("MS") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Select, term!()))); State::Start }
+          Ident("MS") => { next!(); stk.push(Stack::Unary(Unary::Quant(Quant::Select, var!()))); State::Start }
           Ident("NCSC") => { next!(); State::Ret(self.mk_num_conv(NumOp::Suc, term!())) }
           Ident("NCPR") => { next!(); State::Ret(self.mk_num_conv(NumOp::Pre, term!())) }
           Ident("NCA") => { next!(); State::Ret(self.mk_num_conv(NumOp::Add, term!())) }
@@ -706,13 +709,13 @@ impl<'a> ProofArena<'a> {
           if let Some(Char(']')) = tk {
             match l {
               List::Thm(l) => State::ThmListEnd(l, vec![]),
-              List::TermThm(l) => State::TermThmListEnd(l, vec![]),
+              List::VarThm(l) => State::VarThmListEnd(l, HashMap::new()),
             }
           } else {
             match l {
               List::Thm(l) => stk.push(Stack::ThmList(l, vec![])),
-              List::TermThm(l) => {
-                stk.push(Stack::TermThmList(l, vec![], term!()));
+              List::VarThm(l) => {
+                stk.push(Stack::VarThmList(l, HashMap::new(), var!()));
                 parse! { lexer, tk; Char(','), }
               }
             }
@@ -723,14 +726,14 @@ impl<'a> ProofArena<'a> {
           parse! { lexer, tk; Char(']'), }
           match l {
             ThmList::Subs => { stk.push(Stack::Unary(Unary::Subs(args))); State::Start }
-            ThmList::SubsConv => State::Ret(self.subs_conv(args, term!()))
+            ThmList::SubsConv => State::Ret(self.subs_conv(&args, term!()))
           }
         }
-        State::TermThmListEnd(l, args) => {
+        State::VarThmListEnd(l, args) => {
           parse! { lexer, tk; Char(']'), }
           match l {
-            TermThmList::Subst => { stk.push(Stack::Unary(Unary::Subst(args, term!()))); State::Start }
-            TermThmList::SubstConv => State::Ret(self.subst_conv(args, term!(), term!())),
+            VarThmList::Subst => { stk.push(Stack::Unary(Unary::Subst(args, term!()))); State::Start }
+            VarThmList::SubstConv => State::Ret(self.subst_conv(&args, term!(), term!())),
           }
         }
         State::Ret(pr) => match stk.pop() {
@@ -744,15 +747,15 @@ impl<'a> ProofArena<'a> {
             if next { stk.push(Stack::ThmList(l, args)); State::Start }
             else { State::ThmListEnd(l, args) }
           }
-          Some(Stack::TermThmList(l, mut args, tm)) => {
-            args.push((tm, pr));
+          Some(Stack::VarThmList(l, mut args, v)) => {
+            args.entry(v).or_insert(pr);
             parse! { lexer, tk; let next = Opt(Char(';')), }
             if next {
-              stk.push(Stack::TermThmList(l, args, term!()));
+              stk.push(Stack::VarThmList(l, args, var!()));
               parse! { lexer, tk; Char(','), }
               State::Start
             } else {
-              State::TermThmListEnd(l, args)
+              State::VarThmListEnd(l, args)
             }
           }
           Some(Stack::Unary(u)) => match u {
@@ -772,23 +775,23 @@ impl<'a> ProofArena<'a> {
             Unary::EqtElim => State::Ret(self.eqt_elim(pr)),
             Unary::EqtIntro => State::Ret(self.eqt_intro(pr)),
             Unary::Exists(tm1, tm2) => State::Ret(self.exists(tm1, tm2, pr)),
-            Unary::Gen(tm) => State::Ret(self.gen(tm, pr)),
-            Unary::Inst(inst) => State::Ret(self.inst(inst, pr)),
-            Unary::InstType(inst) => State::Ret(self.inst_type(inst, pr)),
+            Unary::Gen(v) => State::Ret(self.gen(v, pr)),
+            Unary::Inst(inst) => State::Ret(self.inst(&inst, pr)),
+            Unary::InstType(inst) => State::Ret(self.inst_type(&inst, pr)),
             Unary::NotElim => State::Ret(self.not_elim(pr)),
             Unary::NotIntro => State::Ret(self.not_intro(pr)),
             Unary::SelectRule => State::Ret(self.select_rule(pr)),
             Unary::Spec(tm) => State::Ret(self.spec(tm, pr)),
-            Unary::Subs(sub) => State::Ret(self.subs(sub, pr)),
-            Unary::Subst(sub, tm) => State::Ret(self.subst(sub, tm, pr)),
+            Unary::Subs(sub) => State::Ret(self.subs(&sub, pr)),
+            Unary::Subst(sub, tm) => State::Ret(self.subst(&sub, tm, pr)),
             Unary::Sym => State::Ret(self.sym(pr)),
             Unary::Undisch => State::Ret(self.undisch(pr)),
-            Unary::Quant(q, tm) => State::Ret(self.mk_quant(q, tm, pr)),
-            Unary::App1 => State::Ret(self.mk_app1(pr, term!())),
-            Unary::App2(tm) => State::Ret(self.mk_app2(tm, pr)),
-            Unary::Bin1(f) => State::Ret(self.mk_bin1(f, pr, term!())),
-            Unary::Bin2(f, tm) => State::Ret(self.mk_bin2(f, tm, pr)),
-            Unary::Not => State::Ret(self.mk_not(pr)),
+            Unary::Quant(q, v) => State::Ret(self.eq_quant(q, v, pr)),
+            Unary::App1 => State::Ret(self.eq_app1(pr, term!())),
+            Unary::App2(tm) => State::Ret(self.eq_app2(tm, pr)),
+            Unary::Bin1(f) => State::Ret(self.eq_binary1(f, pr, term!())),
+            Unary::Bin2(f, tm) => State::Ret(self.eq_binary2(f, tm, pr)),
+            Unary::Not => State::Ret(self.eq_not(pr)),
             Unary::Binary1(b, pr1) => match b {
               Binary::Choose(tm) => State::Ret(self.choose(tm, pr1, pr)),
               Binary::Conj => State::Ret(self.conj(pr1, pr)),
@@ -804,8 +807,8 @@ impl<'a> ProofArena<'a> {
               Binary::Mp => State::Ret(self.mp(pr1, pr)),
               Binary::ProveAsm => State::Ret(self.prove_asm(pr1, pr)),
               Binary::Trans => State::Ret(self.trans(pr1, pr)),
-              Binary::App => State::Ret(self.mk_app(pr1, pr)),
-              Binary::Bin(f) => State::Ret(self.mk_bin(f, pr1, pr)),
+              Binary::App => State::Ret(self.eq_app(pr1, pr)),
+              Binary::Bin(f) => State::Ret(self.eq_binary(f, pr1, pr)),
             }
           }
           None => {
@@ -990,9 +993,12 @@ impl Environment {
     let th = self.parse_thm_def(tys, tms, hyps, concl);
     self.add_thm(k, x, th)
   }
-  pub fn parse_spec(&mut self, xs: &[&str], tys: &[&str], tms: &[&str], tm: &str) -> ThmId {
+  pub fn parse_spec<const N: usize>(&mut self,
+    xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str
+  ) -> ([ConstId; N], ThmId) {
     let th = self.parse_thm_def(tys, tms, &[], tm);
-    self.add_spec(xs, th)
+    let (cs, th) = self.add_spec(xs, th);
+    (cs.try_into().unwrap(), th)
   }
 }
 
@@ -1106,7 +1112,7 @@ impl Importer {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
-          a.alpha_link(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1))
+          a.alpha_link0(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1))
         });
         self.env.add_thm(FetchKind::Thm, x, ThmDef::default());
       }
