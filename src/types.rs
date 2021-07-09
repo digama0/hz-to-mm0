@@ -157,25 +157,16 @@ pub enum Term {
   Lam(VarId, TermId),
 }
 
-// All of these IDs use the proof store in the theorem referenced by `exists_p`
-#[derive(Debug)]
-pub struct TydefData {
-  // Base type `A`
-  pub ty: TypeId,
-  // Term `P: A -> bool`
-  pub p: TermId,
-  // Proof of `? x. P x`
-  pub exists_p: ThmId,
-}
-
 #[derive(Debug)]
 pub struct TyopDef {
+  pub name: String,
   pub arity: u32,
-  pub tydef: Option<TydefData>,
+  pub tydef: Option<ThmId>,
 }
 
 #[derive(Debug)]
 pub struct ConstDef {
+  pub name: String,
   pub ty: OwnedType,
 }
 

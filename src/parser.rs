@@ -8,7 +8,7 @@ use std::io::Read;
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
 use crate::kernel::{Environment, OwnedTerm, OwnedType,
-  ProofArena, TermArena, TypeArena, TypedefInfo, HasTypeStore, HasTermStore};
+  ProofArena, TermArena, TypeArena, HasTypeStore, HasTermStore};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -964,14 +964,6 @@ impl Environment {
       a.axiom(hyps, concl)
     }).0
   }
-  pub fn parse_typedef_info(&mut self, tys: &[&str], tms: &[&str], concl: &str) -> TypedefInfo {
-    ThmDef::with_typedef_info(self, |a| {
-      let tys = a.parse_type_str_preamble(tys);
-      let tms = a.parse_term_str_preamble(&tys, tms);
-      let concl = a.parse_term_str(&tys, &tms, concl);
-      a.axiom(vec![], concl)
-    }).0
-  }
   pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
     let ty = self.parse_owned_type(tys, ty);
     self.add_const(x, ty)
@@ -982,10 +974,10 @@ impl Environment {
   }
   pub fn parse_def(&mut self, x: &str, arity: u32, tys: &[&str], tms: &[&str], tm: &str) -> (ConstId, ThmId) {
     let tm = self.parse_owned_term(tys, tms, tm);
-    self.add_basic_def(x, tm)
+    self.add_simple_def(x, arity, tm)
   }
   pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
-    let tm = self.parse_typedef_info(tys, tms, tm);
+    let tm = self.parse_thm_def(tys, tms, &[], tm);
     self.add_basic_typedef(x, tm)
   }
   pub fn parse_thm(&mut self, k: FetchKind,
@@ -1083,7 +1075,7 @@ impl Importer {
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
         });
-        self.env.add_def(x);
+        self.env.add_def(x, tm);
       }
       ObjectSpec::Spec(xs) => {
         let (pr, _) = ThmDef::with(&self.env, |a| {
@@ -1094,7 +1086,7 @@ impl Importer {
         self.env.add_spec(&xs, pr);
       }
       ObjectSpec::BasicTypedef(x) => {
-        let (pr, _) = ThmDef::with_typedef_info(&self.env, |a| {
+        let (pr, _) = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
@@ -1108,29 +1100,29 @@ impl Importer {
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
-        let pr = ThmDef::with(&self.env, |a| {
+        let (pr, _) = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
           a.alpha_link0(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1))
         });
-        self.env.add_thm(FetchKind::Thm, x, ThmDef::default());
+        self.env.add_thm(FetchKind::Thm, x, pr);
       }
       ObjectSpec::OpenThm(x) => {
-        let pr = ThmDef::with(&self.env, |a| {
+        let (pr, _) = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_thm(FetchKind::OThm, x, ThmDef::default());
+        self.env.add_thm(FetchKind::OThm, x, pr);
       }
       ObjectSpec::NumThm(x) => {
-        let pr = ThmDef::with(&self.env, |a| {
+        let (pr, _) = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_thm(FetchKind::NThm, x.to_string(), ThmDef::default());
+        self.env.add_thm(FetchKind::NThm, x.to_string(), pr);
       }
     };
     assert!(matches!(tk, None));

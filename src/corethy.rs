@@ -2,40 +2,42 @@ use crate::kernel::Environment;
 use crate::types::{ConstId, FetchKind, TyopId};
 
 impl TyopId {
-  pub const BOOL: Self = Self(0);
-  pub const FUN: Self = Self(1);
-  pub const PROD: Self = Self(2); // FIXME
+  pub const BOOL:    Self = Self(0);
+  pub const FUN:     Self = Self(1);
+  pub const PROD:    Self = Self(2);
 }
 
 impl ConstId {
-  pub const EQ: Self = Self(0); // FIXME
-  pub const TRUE: Self = Self(0); // FIXME
-  pub const CONJ: Self = Self(0); // FIXME
-  pub const IMP: Self = Self(0); // FIXME
-  pub const FORALL: Self = Self(0); // FIXME
-  pub const EXISTS: Self = Self(0); // FIXME
-  pub const DISJ: Self = Self(0); // FIXME
-  pub const FALSE: Self = Self(0); // FIXME
-  pub const NOT: Self = Self(0); // FIXME
-  pub const UEXISTS: Self = Self(0); // FIXME
-  pub const SELECT: Self = Self(0); // FIXME
-  pub const PAIR: Self = Self(0); // FIXME
-  pub const ZERO: Self = Self(0); // FIXME
-  pub const SUC: Self = Self(0); // FIXME
-  pub const NUMERAL: Self = Self(0); // FIXME
-  pub const BIT0: Self = Self(0); // FIXME
-  pub const BIT1: Self = Self(0); // FIXME
-  pub const PRE: Self = Self(0); // FIXME
-  pub const ADD: Self = Self(0); // FIXME
-  pub const MULT: Self = Self(0); // FIXME
-  pub const EXP: Self = Self(0); // FIXME
-  pub const LE: Self = Self(0); // FIXME
-  pub const LT: Self = Self(0); // FIXME
-  pub const GE: Self = Self(0); // FIXME
-  pub const GT: Self = Self(0); // FIXME
-  pub const EVEN: Self = Self(0); // FIXME
-  pub const ODD: Self = Self(0); // FIXME
-  pub const SUB: Self = Self(0); // FIXME
+  pub const EQ:      Self = Self(0);
+  pub const TRUE:    Self = Self(1);
+  pub const CONJ:    Self = Self(2);
+  pub const IMP:     Self = Self(3);
+  pub const FORALL:  Self = Self(4);
+  pub const EXISTS:  Self = Self(5);
+  pub const DISJ:    Self = Self(6);
+  pub const FALSE:   Self = Self(7);
+  pub const NOT:     Self = Self(8);
+  pub const UEXISTS: Self = Self(9);
+  pub const SELECT:  Self = Self(10);
+  pub const PAIR:    Self = Self(15);
+  pub const FST:     Self = Self(16);
+  pub const SND:     Self = Self(17);
+  pub const ZERO:    Self = Self(25);
+  pub const SUC:     Self = Self(26);
+  pub const NUMERAL: Self = Self(27);
+  pub const BIT0:    Self = Self(28);
+  pub const BIT1:    Self = Self(29);
+  pub const PRE:     Self = Self(30);
+  pub const ADD:     Self = Self(31);
+  pub const MULT:    Self = Self(32);
+  pub const EXP:     Self = Self(33);
+  pub const LE:      Self = Self(34);
+  pub const LT:      Self = Self(35);
+  pub const GE:      Self = Self(36);
+  pub const GT:      Self = Self(37);
+  pub const EVEN:    Self = Self(38);
+  pub const ODD:     Self = Self(39);
+  pub const SUB:     Self = Self(40);
 }
 
 impl Environment {
@@ -103,18 +105,20 @@ impl Environment {
     // mk_pair = \(x:A) (y:B) a b. (a = x) /\ (b = y)
     env.parse_basic_def("mk_pair", &[a_ty, b_ty], &[vx, vy, "V \"a\" z1", "V \"b\" z2"],
       "L t1 (L t2 (L t3 (L t4 (C (E t3 t1) (E t4 t2)))))");
-    assert_eq!(TyopId::PROD, env.parse_basic_typedef("prod", &["K \"ind\""], &["V \"k\" z1"],
-      "E t1 (A (K \"NUM_REP\") t1)"));
+    // prod = basic_typedef [?x. (\x. ?a b. x = mk_pair a b) x]
+    assert_eq!(TyopId::PROD, env.parse_basic_typedef("prod",
+      &[a_ty, b_ty, "F z1 (F z2 (K \"bool\"))"], &["V \"x\" z3", "V \"a\" z1", "V \"b\" z2"],
+      "X t1 (A (L t1 (X t2 (X t3 (E t1 (B (K \"mk_pair\") t2 t3))))) t1)"));
     env.add_type_bijs(TyopId::PROD, "prod", "ABS_prod", "REP_prod");
     // (,) = \(x:A) (y:B). ABS_prod(mk_pair x y)
     assert_eq!(ConstId::PAIR, env.parse_basic_def(",", &[a_ty, b_ty], &[vx, vy],
       r#"L t1 (L t2 (A (K "ABS_prod" z1 z2) (B (K "mk_pair" z1 z2) t1 t2)))"#).0);
     // FST = \p:A#B. @x. ?y. p = x,y
-    env.parse_basic_def("FST", &[a_ty, b_ty, "K \"prod\" z1 z2"], &["V \"p\" z3", vx, vy],
-      "L t1 (S t2 (X t3 (E t1 (P t2 t3))))");
+    assert_eq!(ConstId::FST, env.parse_basic_def("FST", &[a_ty, b_ty, "K \"prod\" z1 z2"],
+      &["V \"p\" z3", vx, vy], "L t1 (S t2 (X t3 (E t1 (P t2 t3))))").0);
     // SND = \p:A#B. @y. ?x. p = x,y`
-    env.parse_basic_def("SND", &[a_ty, b_ty, "K \"prod\" z1 z2"], &["V \"p\" z3", vx, vy],
-      "L t1 (S t3 (X t2 (E t1 (P t2 t3))))");
+    assert_eq!(ConstId::SND, env.parse_basic_def("SND", &[a_ty, b_ty, "K \"prod\" z1 z2"],
+      &["V \"p\" z3", vx, vy], "L t1 (S t3 (X t2 (E t1 (P t2 t3))))").0);
     env.add_tyop("ind", 0, None);
     // ONE_ONE = \f:A->B. !x1 x2. (f x1 = f x2) ==> (x1 = x2)
     env.parse_def("ONE_ONE", 1, &[a_ty, b_ty, "F z1 z2"],
@@ -126,7 +130,7 @@ impl Environment {
       "L t3 (U t2 (X t1 (E t2 (A t3 t1))))");
     // ?f:ind->ind. ONE_ONE f /\ ~ONTO f
     env.parse_thm(Axiom, "INFINITY_AX", &[ind_ty, "F z1 z1"], &["V \"f\" z2"],
-      &[], "E t1 (C (A (K \"ONE_ONE\" z1 z1) t1) (N (A (K \"ONTO\" z1 z1) t1)))");
+      &[], "X t1 (C (A (K \"ONE_ONE\" z1 z1) t1) (N (A (K \"ONTO\" z1 z1) t1)))");
     // IND_SUC = (@f. ?z. (!x1 x2. f x1 = f x2 <=> x1 = x2) /\ (!x. ~(f x = z)))
     env.parse_def("IND_SUC", 0, &[ind_ty, "F z1 z1"],
       &["V \"z\" z1", "V \"x1\" z1", "V \"x2\" z1", "V \"x\" z1", "V \"f\" z2",
@@ -144,7 +148,7 @@ impl Environment {
       "L t1 (U t2 (I (U t3 (I t5 (A t2 t3))) (A t2 t1)))");
     // num = basic_typedef [?k:ind. NUM_REP k]
     let num = env.parse_basic_typedef("num", &[ind_ty], &["V \"k\" z1"],
-      "E t1 (A (K \"NUM_REP\") t1)");
+      "X t1 (A (K \"NUM_REP\") t1)");
     env.add_type_bijs(num, "num", "mk_num", "dest_num");
     // _0 = mk_num IND_0
     assert_eq!(ConstId::ZERO, env.parse_def("_0", 0,
@@ -162,7 +166,7 @@ impl Environment {
     assert_eq!(ConstId::BIT1, env.parse_def("BIT1", 1,
       &[num_ty], &[vn], "L t1 (A (K \"SUC\") (A (K \"BIT0\") t1))").0);
     // PRE 0 = 0 /\ (!n. PRE (SUC n) = n))
-    let ([c], pre) = env.parse_spec(&["PRE"], &[num_ty],
+    let ([c], pre) = env.parse_spec(&["PRE"], &[num_ty, "F z1 z1"],
       &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
     assert_eq!(c, ConstId::PRE);
@@ -263,7 +267,7 @@ impl Environment {
     env.parse_thm(Thm, "IND_SUC_0", &[ind_ty], &["V \"x\" z1"],
       &[], r#"U t1 (N (E (A (K "IND_SUC") t1) (K "IND_0")))"#);
     // !x1 x2. IND_SUC x1 = IND_SUC x2 <=> x1 = x2
-    env.parse_thm(Thm, "IND_SUC_INJ", &[ind_ty], &["V \"x1\" z1", "V \"x1\" z2", "K \"IND_SUC\""],
+    env.parse_thm(Thm, "IND_SUC_INJ", &[ind_ty], &["V \"x1\" z1", "V \"x2\" z1", "K \"IND_SUC\""],
       &[], "U t1 (U t2 (E (E (A t3 t1) (A t3 t2)) (E t1 t2)))");
     // !n. ~(SUC n = 0)
     env.parse_thm(Thm, "NOT_SUC", &[num_ty], &["V \"n\" z1", "M 0", suc],

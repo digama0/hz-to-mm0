@@ -3,6 +3,7 @@ mod parser;
 pub mod kernel;
 mod corethy;
 mod types;
+mod print;
 
 use std::collections::VecDeque;
 use std::fs::File;
