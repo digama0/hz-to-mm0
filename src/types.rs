@@ -124,23 +124,6 @@ pub enum Binary {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub enum NumOp {
-  Suc,
-  Pre,
-  Add,
-  Sub,
-  Mult,
-  Exp,
-  Even,
-  Odd,
-  Eq,
-  Lt,
-  Le,
-  Gt,
-  Ge,
-}
-
-#[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Quant {
   Lambda,
   Forall,

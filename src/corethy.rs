@@ -108,7 +108,7 @@ impl Environment {
     // prod = basic_typedef [?x. (\x. ?a b. x = mk_pair a b) x]
     assert_eq!(TyopId::PROD, env.parse_basic_typedef("prod",
       &[a_ty, b_ty, "F z1 (F z2 (K \"bool\"))"], &["V \"x\" z3", "V \"a\" z1", "V \"b\" z2"],
-      "X t1 (A (L t1 (X t2 (X t3 (E t1 (B (K \"mk_pair\") t2 t3))))) t1)"));
+      "X t1 (A (L t1 (X t2 (X t3 (E t1 (B (K \"mk_pair\" z1 z2) t2 t3))))) t1)"));
     env.add_type_bijs(TyopId::PROD, "prod", "ABS_prod", "REP_prod");
     // (,) = \(x:A) (y:B). ABS_prod(mk_pair x y)
     assert_eq!(ConstId::PAIR, env.parse_basic_def(",", &[a_ty, b_ty], &[vx, vy],
@@ -259,10 +259,10 @@ impl Environment {
       &[], "U t1 (X t2 (X t3 (E t1 (P t2 t3))))");
     // !x y. FST (x,y) = x
     env.parse_thm(Thm, "FST", &[a_ty, b_ty], &["V \"x\" z1", "V \"y\" z2"],
-      &[], "U t1 (U t2 (E (A (K \"FST\") (P t1 t2)) t1))");
+      &[], "U t1 (U t2 (E (A (K \"FST\" z1 z2) (P t1 t2)) t1))");
     // !x y. SND (x,y) = y
     env.parse_thm(Thm, "SND", &[a_ty, b_ty], &["V \"x\" z1", "V \"y\" z2"],
-      &[], "U t1 (U t2 (E (A (K \"SND\") (P t1 t2)) t2))");
+      &[], "U t1 (U t2 (E (A (K \"SND\" z1 z2) (P t1 t2)) t2))");
     // !x. ~(IND_SUC x = IND_0)
     env.parse_thm(Thm, "IND_SUC_0", &[ind_ty], &["V \"x\" z1"],
       &[], r#"U t1 (N (E (A (K "IND_SUC") t1) (K "IND_0")))"#);

@@ -4,7 +4,7 @@ use crate::types::*;
 use crate::kernel::*;
 
 pub struct Print<'a, S: ?Sized, T> {
-  pub env: &'a Environment,
+  pub env: Option<&'a Environment>,
   pub arena: &'a S,
   pub t: T,
 }
@@ -20,7 +20,7 @@ impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TypeId> {
 }
 
 fn print_type(
-  env: &Environment,
+  env: Option<&Environment>,
   arena: &(impl HasTypeStore + ?Sized),
   ty: TypeId,
   prec: u32,
@@ -43,7 +43,11 @@ fn print_type(
       if prec >= 10 { write!(f, ")")? }
     }
     Type::Const(tyop, ref args) => {
-      write!(f, "{}", env[tyop].name)?;
+      if let Some(env) = env {
+        write!(f, "{}", env[tyop].name)?;
+      } else {
+        write!(f, "_{}", tyop.0)?;
+      }
       if let Some((&first, rest)) = args.split_first() {
         write!(f, "[")?;
         print_type(env, arena, first, 0, f)?;
@@ -79,8 +83,40 @@ impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, TermId> {
   }
 }
 
+const TYPES: bool = true;
+const CONST_TYPES: bool = true;
+
+fn print_binder<S: HasTermStore + ?Sized>(
+  env: Option<&Environment>,
+  arena: &S,
+  s: &str,
+  prec: u32,
+  mut v: VarId,
+  mut e: TermId,
+  f: &mut Formatter<'_>,
+  dest: impl Fn(&S, TermId) -> Option<(VarId, TermId)>,
+) -> fmt::Result {
+  if prec >= 10 { write!(f, "(")? }
+  f.write_str(s)?;
+  loop {
+    let Var {ref name, ty} = *arena[v];
+    if TYPES {
+      write!(f, " ({}: ", name)?;
+      print_type(env, arena, ty, 0, f)?;
+      write!(f, ")")?;
+    } else {
+      write!(f, " {}", name)?;
+    }
+    if let Some((v2, e2)) = dest(arena, e) { v = v2; e = e2 } else { break }
+  }
+  write!(f, ". ")?;
+  print_term(env, arena, e, 9, f)?;
+  if prec >= 10 { write!(f, ")")? }
+  Ok(())
+}
+
 fn print_term(
-  env: &Environment,
+  env: Option<&Environment>,
   arena: &(impl HasTermStore + ?Sized),
   tm: TermId,
   prec: u32,
@@ -88,22 +124,79 @@ fn print_term(
 ) -> fmt::Result {
   match *arena[tm] {
     Term::Var(v) => write!(f, "{}", arena[v].name)?,
-    Term::Const(c, _) => write!(f, "{}", env[c].name)?,
-    Term::Lam(mut v, mut e) => {
-      if prec >= 10 { write!(f, "(")? }
-      write!(f, "\\")?;
-      loop {
-        let Var{ref name, ty} = *arena[v];
-        write!(f, " ({}: ", name)?;
-        print_type(env, arena, ty, 0, f)?;
-        write!(f, ")")?;
-        if let Some((v2, e2)) = arena.try_dest_lam(e) { v = v2; e = e2 } else { break }
+    Term::Const(ConstId::FORALL, _) => write!(f, "(!)")?,
+    Term::Const(ConstId::EXISTS, _) => write!(f, "(?)")?,
+    Term::Const(ConstId::EQ, _) => write!(f, "(=)")?,
+    Term::Const(ConstId::ADD, _) => write!(f, "(+)")?,
+    Term::Const(ConstId::SUB, _) => write!(f, "(-)")?,
+    Term::Const(ConstId::MULT, _) => write!(f, "(*)")?,
+    Term::Const(c, ref args) => {
+      if let Some(env) = env { write!(f, "{}", env[c].name)? } else { write!(f, "C{}", c.0)? }
+      if CONST_TYPES {
+        if let Some((&first, rest)) = args.split_first() {
+          write!(f, "[")?;
+          print_type(env, arena, first, 0, f)?;
+          for &ty in rest {
+            write!(f, ",")?;
+            print_type(env, arena, ty, 0, f)?;
+          }
+          write!(f, "]")?;
+        }
       }
-      write!(f, ". ")?;
-      print_term(env, arena, e, 9, f)?;
-      if prec >= 10 { write!(f, ")")? }
     }
+    Term::Lam(v, e) => print_binder(env, arena, "\\", prec, v, e, f, |a, e| a.try_dest_lam(e))?,
     Term::App(g, t) => {
+      match *arena[g] {
+        Term::Const(ConstId::FORALL, _) => if let Term::Lam(v, e) = *arena[t] {
+          return print_binder(env, arena, "!", prec, v, e, f, |a, e| a.try_dest_forall(e))
+        }
+        Term::Const(ConstId::EXISTS, _) => if let Term::Lam(v, e) = *arena[t] {
+          return print_binder(env, arena, "?", prec, v, e, f, |a, e| a.try_dest_exists(e))
+        }
+        Term::App(g, t1) => match *arena[g] {
+          Term::Const(ConstId::EQ, ref ty) => if arena.is_bool(ty[0]) {
+            if prec >= 2 { write!(f, "(")? }
+            print_term(env, arena, t1, 2, f)?;
+            write!(f, " <=> ")?;
+            print_term(env, arena, t, 1, f)?;
+            if prec >= 2 { write!(f, ")")? }
+            return Ok(())
+          } else {
+            if prec >= 12 { write!(f, "(")? }
+            print_term(env, arena, t1, 12, f)?;
+            write!(f, " = ")?;
+            print_term(env, arena, t, 11, f)?;
+            if prec >= 12 { write!(f, ")")? }
+            return Ok(())
+          }
+          Term::Const(ConstId::ADD, _) => {
+            if prec >= 16 { write!(f, "(")? }
+            print_term(env, arena, t1, 16, f)?;
+            write!(f, " + ")?;
+            print_term(env, arena, t, 15, f)?;
+            if prec >= 16 { write!(f, ")")? }
+            return Ok(())
+          }
+          Term::Const(ConstId::SUB, _) => {
+            if prec >= 18 { write!(f, "(")? }
+            print_term(env, arena, t1, 17, f)?;
+            write!(f, " - ")?;
+            print_term(env, arena, t, 18, f)?;
+            if prec >= 18 { write!(f, ")")? }
+            return Ok(())
+          }
+          Term::Const(ConstId::MULT, _) => {
+            if prec >= 20 { write!(f, "(")? }
+            print_term(env, arena, t1, 20, f)?;
+            write!(f, " * ")?;
+            print_term(env, arena, t, 19, f)?;
+            if prec >= 20 { write!(f, ")")? }
+            return Ok(())
+          }
+          _ => {}
+        }
+        _ => {}
+      }
       if prec >= 50 { write!(f, "(")? }
       print_term(env, arena, g, 49, f)?;
       write!(f, " ")?;
