@@ -185,7 +185,7 @@ impl Environment {
     // (!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)
     let ([c], exp) = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"EXP\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
-      "X t1 (C (U t4 (E (B t1 t2 t4) (M 1))) \
+      "X t1 (C (U t4 (E (B t1 t4 t2) (M 1))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (B (K \"*\") t4 (B t1 t4 t5))))))");
     assert_eq!(c, ConstId::EXP);
     // (!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)
@@ -219,7 +219,7 @@ impl Environment {
     // (!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))
     let ([c], sub) = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"-\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1", "K \"PRE\""],
-      "X t1 (C (U t4 (E (B t1 t2 t4) t2)) \
+      "X t1 (C (U t4 (E (B t1 t4 t2) t4)) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (A t6 (B t1 t4 t5))))))");
     assert_eq!(c, ConstId::SUB);
     // TYPE_DEFINITION = \(P:A->bool) (rep:B->A). ONE_ONE rep /\ (!x:A. P x <=> (?y:B. x = rep y))

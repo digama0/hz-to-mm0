@@ -109,8 +109,8 @@ impl TransTable {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Type {
-  Var(TyVarId),
-  Const(TyopId, Vec<TypeId>),
+  TyVar(TyVarId),
+  Tyop(TyopId, Vec<TypeId>),
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -154,10 +154,9 @@ pub struct ConstDef {
 }
 
 #[derive(Debug)]
-#[derive(Default)] // FIXME
 pub struct ThmDef {
   pub arena: TermStore,
-  pub tyvars: u32,
+  pub tyvars: Box<[TyVarId]>,
   pub hyps: Box<[TermId]>,
   pub concl: TermId,
 }

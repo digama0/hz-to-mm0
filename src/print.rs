@@ -4,7 +4,7 @@ use crate::types::*;
 use crate::kernel::*;
 
 pub struct Print<'a, S: ?Sized, T> {
-  pub env: Option<&'a Environment>,
+  pub env: Option<(&'a Environment, &'a TyVarRef<'a>)>,
   pub arena: &'a S,
   pub t: T,
 }
@@ -20,30 +20,36 @@ impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TypeId> {
 }
 
 fn print_type(
-  env: Option<&Environment>,
+  env: Option<(&Environment, &TyVarRef<'_>)>,
   arena: &(impl HasTypeStore + ?Sized),
   ty: TypeId,
   prec: u32,
   f: &mut Formatter<'_>
 ) -> fmt::Result {
   match *arena[ty] {
-    Type::Var(v) => write!(f, "{}", v)?,
-    Type::Const(TyopId::FUN, ref args) => {
+    Type::TyVar(v) => {
+      if let Some((_, tyvars)) = env {
+        write!(f, "{}", tyvars[v])?;
+      } else {
+        write!(f, "{}", v)?
+      }
+    }
+    Type::Tyop(TyopId::FUN, ref args) => {
       if prec >= 5 { write!(f, "(")? }
       print_type(env, arena, args[0], 5, f)?;
       write!(f, "->")?;
       print_type(env, arena, args[1], 4, f)?;
       if prec >= 5 { write!(f, ")")? }
     }
-    Type::Const(TyopId::PROD, ref args) => {
+    Type::Tyop(TyopId::PROD, ref args) => {
       if prec >= 10 { write!(f, "(")? }
       print_type(env, arena, args[0], 10, f)?;
       write!(f, "#")?;
       print_type(env, arena, args[1], 9, f)?;
       if prec >= 10 { write!(f, ")")? }
     }
-    Type::Const(tyop, ref args) => {
-      if let Some(env) = env {
+    Type::Tyop(tyop, ref args) => {
+      if let Some((env, _)) = env {
         write!(f, "{}", env[tyop].name)?;
       } else {
         write!(f, "_{}", tyop.0)?;
@@ -83,11 +89,12 @@ impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, TermId> {
   }
 }
 
-const TYPES: bool = true;
-const CONST_TYPES: bool = true;
+const TYPES: bool = false;
+const CONST_TYPES: bool = false;
+const VAR_TYPES: bool = false;
 
 fn print_binder<S: HasTermStore + ?Sized>(
-  env: Option<&Environment>,
+  env: Option<(&Environment, &TyVarRef<'_>)>,
   arena: &S,
   s: &str,
   prec: u32,
@@ -116,14 +123,18 @@ fn print_binder<S: HasTermStore + ?Sized>(
 }
 
 fn print_term(
-  env: Option<&Environment>,
+  env: Option<(&Environment, &TyVarRef<'_>)>,
   arena: &(impl HasTermStore + ?Sized),
   tm: TermId,
   prec: u32,
   f: &mut Formatter<'_>
 ) -> fmt::Result {
   match *arena[tm] {
-    Term::Var(v) => write!(f, "{}", arena[v].name)?,
+    Term::Var(v) => {
+      let var = &arena[v];
+      write!(f, "{}", var.name)?;
+      if VAR_TYPES { write!(f, ":")?; print_type(env, arena, var.ty, u32::MAX, f)?; }
+    }
     Term::Const(ConstId::FORALL, _) => write!(f, "(!)")?,
     Term::Const(ConstId::EXISTS, _) => write!(f, "(?)")?,
     Term::Const(ConstId::EQ, _) => write!(f, "(=)")?,
@@ -131,7 +142,7 @@ fn print_term(
     Term::Const(ConstId::SUB, _) => write!(f, "(-)")?,
     Term::Const(ConstId::MULT, _) => write!(f, "(*)")?,
     Term::Const(c, ref args) => {
-      if let Some(env) = env { write!(f, "{}", env[c].name)? } else { write!(f, "C{}", c.0)? }
+      if let Some((env, _)) = env { write!(f, "{}", env[c].name)? } else { write!(f, "C{}", c.0)? }
       if CONST_TYPES {
         if let Some((&first, rest)) = args.split_first() {
           write!(f, "[")?;
@@ -153,47 +164,40 @@ fn print_term(
         Term::Const(ConstId::EXISTS, _) => if let Term::Lam(v, e) = *arena[t] {
           return print_binder(env, arena, "?", prec, v, e, f, |a, e| a.try_dest_exists(e))
         }
-        Term::App(g, t1) => match *arena[g] {
-          Term::Const(ConstId::EQ, ref ty) => if arena.is_bool(ty[0]) {
-            if prec >= 2 { write!(f, "(")? }
-            print_term(env, arena, t1, 2, f)?;
-            write!(f, " <=> ")?;
-            print_term(env, arena, t, 1, f)?;
-            if prec >= 2 { write!(f, ")")? }
-            return Ok(())
-          } else {
-            if prec >= 12 { write!(f, "(")? }
-            print_term(env, arena, t1, 12, f)?;
-            write!(f, " = ")?;
-            print_term(env, arena, t, 11, f)?;
-            if prec >= 12 { write!(f, ")")? }
-            return Ok(())
+        Term::Const(ConstId::NUMERAL, _) => if let Some(n) = arena.try_dest_raw_int(t) {
+          return write!(f, "{}", n)
+        }
+        Term::App(g, t1) => {
+          macro_rules! print_binop {
+            ($s:expr, lassoc, $n:expr) => { print_binop!($s, $n, $n - 1, $n) };
+            ($s:expr, rassoc, $n:expr) => { print_binop!($s, $n, $n, $n - 1) };
+            ($s:expr, $prec:expr, $l:expr, $r:expr) => {{
+              if prec >= $prec { write!(f, "(")? }
+              print_term(env, arena, t1, $l, f)?;
+              write!(f, concat!(" ", $s, " "))?;
+              print_term(env, arena, t, $r, f)?;
+              if prec >= $prec { write!(f, ")")? }
+              return Ok(())
+            }};
           }
-          Term::Const(ConstId::ADD, _) => {
-            if prec >= 16 { write!(f, "(")? }
-            print_term(env, arena, t1, 16, f)?;
-            write!(f, " + ")?;
-            print_term(env, arena, t, 15, f)?;
-            if prec >= 16 { write!(f, ")")? }
-            return Ok(())
+          match *arena[g] {
+            Term::Const(ConstId::IMP, _) => print_binop!("==>", rassoc, 4),
+            Term::Const(ConstId::DISJ, _) => print_binop!("\\/", rassoc, 6),
+            Term::Const(ConstId::CONJ, _) => print_binop!("/\\", rassoc, 8),
+            Term::Const(ConstId::EQ, ref ty) =>
+              if arena.is_bool(ty[0]) { print_binop!("<=>", rassoc, 2) }
+              else { print_binop!("=", rassoc, 12) }
+            Term::Const(ConstId::PAIR, _) => print_binop!(",", rassoc, 14),
+            Term::Const(ConstId::LT, _) => print_binop!("<", rassoc, 12),
+            Term::Const(ConstId::LE, _) => print_binop!("<=", rassoc, 12),
+            Term::Const(ConstId::GT, _) => print_binop!(">", rassoc, 12),
+            Term::Const(ConstId::GE, _) => print_binop!(">=", rassoc, 12),
+            Term::Const(ConstId::ADD, _) => print_binop!("+", rassoc, 16),
+            Term::Const(ConstId::SUB, _) => print_binop!("-", lassoc, 18),
+            Term::Const(ConstId::MULT, _) => print_binop!("*", rassoc, 20),
+            Term::Const(ConstId::EXP, _) => print_binop!("EXP", lassoc, 24),
+            _ => {}
           }
-          Term::Const(ConstId::SUB, _) => {
-            if prec >= 18 { write!(f, "(")? }
-            print_term(env, arena, t1, 17, f)?;
-            write!(f, " - ")?;
-            print_term(env, arena, t, 18, f)?;
-            if prec >= 18 { write!(f, ")")? }
-            return Ok(())
-          }
-          Term::Const(ConstId::MULT, _) => {
-            if prec >= 20 { write!(f, "(")? }
-            print_term(env, arena, t1, 20, f)?;
-            write!(f, " * ")?;
-            print_term(env, arena, t, 19, f)?;
-            if prec >= 20 { write!(f, ")")? }
-            return Ok(())
-          }
-          _ => {}
         }
         _ => {}
       }

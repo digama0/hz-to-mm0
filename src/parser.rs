@@ -272,7 +272,7 @@ impl<'a> TypeArena<'a> {
       Paren,
       Fun,
       Fun1(TypeId),
-      Const(TyopId, Vec<TypeId>),
+      Tyop(TyopId, Vec<TypeId>),
     }
     #[derive(Debug)]
     enum State {
@@ -290,12 +290,12 @@ impl<'a> TypeArena<'a> {
           Some(TType(i)) => { tk = lexer.next(); State::Ret(tys[i as usize]) }
           Some(Char('(')) => { tk = lexer.next(); stk.push(Stack::Paren); State::Start }
           Some(Ident("V")) => { tk = lexer.next();
-            parse! { lexer, tk; let x = Str(v) => self.mk_var_name(v.to_owned()), }
-            State::Ret(self.mk_var(x))
+            parse! { lexer, tk; let x = Str(v) => self.env.mk_tyvar(v.into()), }
+            State::Ret(self.mk_tyvar(x))
           }
           Some(Ident("K")) => { tk = lexer.next();
             parse! { lexer, tk; let x = Str(v) => self.env.trans.tyops[v], }
-            stk.push(Stack::Const(x, vec![]));
+            stk.push(Stack::Tyop(x, vec![]));
             State::Start
           }
           Some(Ident("F")) => { tk = lexer.next();
@@ -303,7 +303,7 @@ impl<'a> TypeArena<'a> {
             State::Start
           }
           ref tk => match stk.pop() {
-            Some(Stack::Const(x, args)) => State::Ret(self.mk_const(x, args)),
+            Some(Stack::Tyop(x, args)) => State::Ret(self.mk_tyop(x, args)),
             _ => panic!("parse_type parse error: {:?}", tk)
           }
         }
@@ -319,9 +319,9 @@ impl<'a> TypeArena<'a> {
           Some(Stack::Fun1(ty1)) => {
             State::Ret(self.mk_fun(ty1, ty))
           }
-          Some(Stack::Const(x, mut args)) => {
+          Some(Stack::Tyop(x, mut args)) => {
             args.push(ty);
-            stk.push(Stack::Const(x, args));
+            stk.push(Stack::Tyop(x, args));
             State::Start
           }
           None => {
@@ -398,7 +398,10 @@ impl<'a> TermArena<'a> {
     macro_rules! next {() => {tk = lexer.next()}}
     let mut state = State::Start;
     loop {
-      // if let State::Ret(tm) = state { println!("{}", self.pp(tm)) }
+      // if let State::Ret(tm) = state {
+      //   let tvr = &self.env.tyvars();
+      //   println!("{}", self.pp(tvr, tm))
+      // }
       // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
       state = match state {
         State::Start => match tk.unwrap() {
@@ -612,8 +615,13 @@ impl<'a> ProofArena<'a> {
     use Token::{Char, Ident, Type as TType, Term as TTerm};
     let mut state = State::Start;
     loop {
-      // if let State::Ret(th) = state { println!("{}", self.pp(th)) }
-      // println!("{:?}: state = {:?}, stack = {:?}", tk, state, stk);
+      if self.env.print {
+        if let State::Ret(th) = state {
+          let tvr = &self.env.tyvars();
+          println!("{:?}: {}", th, self.pp(tvr, th))
+        }
+        println!("{:?}: state = {:?}, stack = {:?}\n", tk, state, stk);
+      }
       state = match state {
         State::Start => match tk.unwrap() {
           Token::Fetch(i) => { next!(); State::Ret(fetches[i as usize]) }
@@ -779,7 +787,7 @@ impl<'a> ProofArena<'a> {
             Unary::Exists(tm1, tm2) => State::Ret(self.exists(tm1, tm2, pr)),
             Unary::Gen(v) => State::Ret(self.gen(v, pr)),
             Unary::Inst(inst) => State::Ret(self.inst(&inst, pr)),
-            Unary::InstType(inst) => State::Ret(self.inst_type(&inst, pr)),
+            Unary::InstType(inst) => State::Ret(self.inst_type_from(&inst, pr)),
             Unary::NotElim => State::Ret(self.not_elim(pr)),
             Unary::NotIntro => State::Ret(self.not_intro(pr)),
             Unary::SelectRule => State::Ret(self.select_rule(pr)),
@@ -948,14 +956,14 @@ impl Environment {
     OwnedType::with(self, |a| {
       let tys = a.parse_type_str_preamble(tys);
       a.parse_type_str(&tys, ty)
-    }).0
+    })
   }
   pub fn parse_owned_term(&mut self, tys: &[&str], tms: &[&str], tm: &str) -> OwnedTerm {
     OwnedTerm::with(self, |a| {
       let tys = a.parse_type_str_preamble(tys);
       let tms = a.parse_term_str_preamble(&tys, tms);
       a.parse_term_str(&tys, &tms, tm)
-    }).0
+    })
   }
   pub fn parse_thm_def(&mut self, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmDef {
     ThmDef::with(self, |a| {
@@ -964,7 +972,7 @@ impl Environment {
       let hyps = hyps.iter().map(|h| a.parse_term_str(&tys, &tms, h)).collect();
       let concl = a.parse_term_str(&tys, &tms, concl);
       a.axiom(hyps, concl)
-    }).0
+    })
   }
   pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
     let ty = self.parse_owned_type(tys, ty);
@@ -998,7 +1006,7 @@ impl Environment {
 
 impl Importer {
   pub fn import(&mut self, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
-    println!("{:?}", kind);
+    println!("=============== {:?}", kind);
     let file = self.mpath.join(&data.file);
     let mut lexer = Lexer::from(File::open(file).unwrap().bytes().map(Result::unwrap));
     let mut tk = lexer.next();
@@ -1049,14 +1057,14 @@ impl Importer {
         self.env.add_tyop(x, arity, None);
       }
       ObjectSpec::ConstDecl(x) => {
-        let (ty, _) = OwnedType::with(&self.env, |a| {
+        let ty = OwnedType::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           parse_type_section(&mut tk, &mut lexer, &tys)
         });
         self.env.add_const(x, ty);
       }
       ObjectSpec::Axiom(x) => {
-        let (tm, _) = OwnedTerm::with(&self.env, |a| {
+        let tm = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1064,7 +1072,7 @@ impl Importer {
         self.env.add_axiom(x, tm);
       }
       ObjectSpec::BasicDef(x) => {
-        let (tm, _) = OwnedTerm::with(&self.env, |a| {
+        let tm = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1072,7 +1080,7 @@ impl Importer {
         self.env.add_basic_def(x, tm);
       }
       ObjectSpec::Def(x) => {
-        let (tm, _) = OwnedTerm::with(&self.env, |a| {
+        let tm = OwnedTerm::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
@@ -1080,7 +1088,7 @@ impl Importer {
         self.env.add_def(x, tm);
       }
       ObjectSpec::Spec(xs) => {
-        let (pr, _) = ThmDef::with(&self.env, |a| {
+        let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
@@ -1088,7 +1096,7 @@ impl Importer {
         self.env.add_spec(&xs, pr);
       }
       ObjectSpec::BasicTypedef(x) => {
-        let (pr, _) = ThmDef::with(&self.env, |a| {
+        let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
@@ -1102,7 +1110,8 @@ impl Importer {
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
-        let (pr, _) = ThmDef::with(&self.env, |a| {
+        // self.env.print = x == "FNIL";
+        let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
@@ -1111,7 +1120,7 @@ impl Importer {
         self.env.add_thm(FetchKind::Thm, x, pr);
       }
       ObjectSpec::OpenThm(x) => {
-        let (pr, _) = ThmDef::with(&self.env, |a| {
+        let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
@@ -1119,7 +1128,7 @@ impl Importer {
         self.env.add_thm(FetchKind::OThm, x, pr);
       }
       ObjectSpec::NumThm(x) => {
-        let (pr, _) = ThmDef::with(&self.env, |a| {
+        let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
