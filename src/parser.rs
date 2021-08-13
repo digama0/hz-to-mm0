@@ -7,7 +7,7 @@ use std::io::Read;
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
 use crate::kernel::{Environment, HasTermStore, HasTypeStore,
-  OwnedTerm, OwnedType, ProofArena, SubsInst, TermArena, TypeArena};
+  OwnedTerm, OwnedType, ProofArena, SubsInst, TermArena, TypeArena, get_print};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -615,7 +615,7 @@ impl<'a> ProofArena<'a> {
     use Token::{Char, Ident, Type as TType, Term as TTerm};
     let mut state = State::Start;
     loop {
-      if self.env.print {
+      if get_print() {
         if let State::Ret(th) = state {
           let tvr = &self.env.tyvars();
           println!("{:?}: {}", th, self.pp(tvr, th))
@@ -1110,7 +1110,6 @@ impl Importer {
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
-        // self.env.print = x == "FNIL";
         let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);

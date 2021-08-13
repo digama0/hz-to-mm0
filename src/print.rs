@@ -1,7 +1,21 @@
-use std::fmt::{self, Display, Formatter};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Display, Debug, Formatter};
 
 use crate::types::*;
 use crate::kernel::*;
+
+#[derive(Clone, Copy)]
+pub struct EnvPrint<'a, S: ?Sized> {
+  pub env: &'a Environment,
+  pub tyvars: &'a TyVarRef<'a>,
+  pub arena: &'a S,
+}
+
+impl<'a, S: ?Sized> EnvPrint<'a, S> {
+  pub fn pp<T>(&self, t: T) -> Print<'a, S, T> {
+    Print { env: Some((self.env, self.tyvars)), arena: self.arena, t}
+  }
+}
 
 pub struct Print<'a, S: ?Sized, T> {
   pub env: Option<(&'a Environment, &'a TyVarRef<'a>)>,
@@ -9,8 +23,58 @@ pub struct Print<'a, S: ?Sized, T> {
   pub t: T,
 }
 
+impl<'a, S: ?Sized, T> Print<'a, S, T> {
+  pub fn to<U>(&self, u: U) -> Print<'a, S, U> {
+    Print { env: self.env, arena: self.arena, t: u }
+  }
+}
+
 impl Display for TyVarId {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { write!(f, "T{}", self.0) }
+}
+
+struct DisplayAsDebug<T>(T);
+impl<T: Display> Debug for DisplayAsDebug<T> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { self.0.fmt(f) }
+}
+
+struct DisplayFn<F: Fn(&mut Formatter<'_>) -> fmt::Result>(F);
+impl<F: Fn(&mut Formatter<'_>) -> fmt::Result> Display for DisplayFn<F> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { self.0(f) }
+}
+impl<F: Fn(&mut Formatter<'_>) -> fmt::Result> Debug for DisplayFn<F> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { self.0(f) }
+}
+
+impl<'a, S: ?Sized, T: Copy> Display for Print<'a, S, &[T]>
+where Print<'a, S, T>: Display {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_list().entries(self.t.iter().map(|&t| DisplayAsDebug(self.to(t)))).finish()
+  }
+}
+
+impl<'a, S: ?Sized, A: Copy, B: Copy> Display for Print<'a, S, (A, B)>
+where Print<'a, S, A>: Display, Print<'a, S, B>: Display {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("")
+      .field(&DisplayAsDebug(self.to(self.t.0)))
+      .field(&DisplayAsDebug(self.to(self.t.1)))
+      .finish()
+  }
+}
+
+impl<'a, S: ?Sized, T: Copy> Display for Print<'a, S, &HashSet<T>>
+where Print<'a, S, T>: Display {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_list().entries(self.t.iter().map(|&t| DisplayAsDebug(self.to(t)))).finish()
+  }
+}
+
+impl<'a, S: ?Sized, A: Copy, B: Copy> Display for Print<'a, S, &HashMap<A, B>>
+where Print<'a, S, A>: Display, Print<'a, S, B>: Display {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_list().entries(self.t.iter().map(|(&k, &v)| DisplayAsDebug(self.to((k, v))))).finish()
+  }
 }
 
 impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TypeId> {
@@ -92,6 +156,7 @@ impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, TermId> {
 const TYPES: bool = false;
 const CONST_TYPES: bool = false;
 const VAR_TYPES: bool = false;
+const NUMERALS: bool = true;
 
 fn print_binder<S: HasTermStore + ?Sized>(
   env: Option<(&Environment, &TyVarRef<'_>)>,
@@ -164,8 +229,10 @@ fn print_term(
         Term::Const(ConstId::EXISTS, _) => if let Term::Lam(v, e) = *arena[t] {
           return print_binder(env, arena, "?", prec, v, e, f, |a, e| a.try_dest_exists(e))
         }
-        Term::Const(ConstId::NUMERAL, _) => if let Some(n) = arena.try_dest_raw_int(t) {
-          return write!(f, "{}", n)
+        Term::Const(ConstId::NUMERAL, _) => if NUMERALS {
+          if let Some(n) = arena.try_dest_raw_int(true, t) {
+            return write!(f, "{}", n)
+          }
         }
         Term::App(g, t1) => {
           macro_rules! print_binop {
@@ -211,3 +278,34 @@ fn print_term(
   Ok(())
 }
 
+impl<'a, S: HasProofStore + ?Sized> Display for Print<'a, S, HypsId> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    self.to(&**self.arena[self.t]).fmt(f)
+  }
+}
+
+impl<'a, S: HasProofStore + ?Sized> Display for Print<'a, S, ProofId> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    let p = &*self.arena[self.t];
+    write!(f, "{} |- {}", self.to(p.hyps()), self.to(p.concl()))
+  }
+}
+
+impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, &InstTerm> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("InstTerm")
+      .field("inst", &DisplayAsDebug(self.to(self.t.inst())))
+      .field("fvars", &DisplayAsDebug(self.to(self.t.fvars())))
+      .finish()
+  }
+}
+
+impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, &SubsInst> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("SubsInst")
+      .field("map", &DisplayAsDebug(self.to(self.t.map())))
+      .field("hyps", &DisplayAsDebug(self.to(self.t.hyps())))
+      .field("fvars", &DisplayAsDebug(self.to(self.t.vars())))
+      .finish()
+  }
+}

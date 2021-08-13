@@ -13,9 +13,11 @@ use std::ops::Index;
 use std::ops::IndexMut;
 use std::rc::Rc;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use bitvec::{bitbox, prelude::BitBox};
 use num::{BigUint, Zero, CheckedSub};
 
+use crate::print::EnvPrint;
 use crate::print::Print;
 use crate::types::*;
 
@@ -26,6 +28,11 @@ impl Node for Var { type Idx = VarId; }
 impl Node for Term { type Idx = TermId; }
 impl Node for Proof { type Idx = ProofId; }
 impl Node for Hyps { type Idx = HypsId; }
+
+pub static PRINT: AtomicBool = AtomicBool::new(false);
+
+pub fn get_print() -> bool { PRINT.load(SeqCst) }
+pub fn set_print(b: bool) { PRINT.store(b, SeqCst) }
 
 #[derive(Debug)]
 pub struct Store<H: ?Sized, A = ()>(Vec<(Rc<H>, A)>);
@@ -495,15 +502,18 @@ pub trait HasTermStore:
     self.try_dest_not(a).expect("dest_not: expected a negation")
   }
 
-  fn try_dest_raw_int(&self, mut t: TermId) -> Option<BigUint> {
+  fn try_dest_raw_int(&self, strict: bool, mut t: TermId) -> Option<BigUint> {
     let mut out = BigUint::zero();
-    loop {
+    for bit in 0.. {
       match *self[t] {
-        Term::Const(ConstId::ZERO, _) => return Some(out),
+        Term::Const(ConstId::ZERO, _) => {
+          if strict && bit != 0 { return None }
+          return Some(out)
+        }
         Term::App(f, e) => {
           match *self[f] {
-            Term::Const(ConstId::BIT0, _) => { out <<= 1 }
-            Term::Const(ConstId::BIT1, _) => { out <<= 1; out += 1u32 }
+            Term::Const(ConstId::BIT0, _) => {}
+            Term::Const(ConstId::BIT1, _) => { out.set_bit(bit, true) }
             _ => return None,
           }
           t = e;
@@ -511,15 +521,16 @@ pub trait HasTermStore:
         _ => return None,
       }
     }
+    unreachable!()
   }
 
-  fn try_dest_int(&self, t: TermId) -> Option<BigUint> {
+  fn try_dest_int(&self, strict: bool, t: TermId) -> Option<BigUint> {
     let t = self.try_dest_unop(ConstId::NUMERAL, t)?;
-    self.try_dest_raw_int(t)
+    self.try_dest_raw_int(strict, t)
   }
 
-  fn dest_int(&self, t: TermId) -> BigUint {
-    self.try_dest_int(t).expect("dest_int: not a numeral")
+  fn dest_int(&self, strict: bool, t: TermId) -> BigUint {
+    self.try_dest_int(strict, t).expect("dest_int: not a numeral")
   }
 
   fn alpha_cmp(&self, a: TermId, b: TermId) -> Ordering {
@@ -527,6 +538,11 @@ pub trait HasTermStore:
       ctx: &mut Vec<(VarId, VarId)>, a: TermId, b: TermId
     ) -> Ordering {
       if a == b && ctx.iter().all(|&(x, y)| x == y) { return Ordering::Equal }
+      // if get_print() {
+      //   println!("alpha_cmp {}:\n  {}\n= {}",
+      //     this.print_with_env(None, &**ctx),
+      //     this.print_with_env(None, a), this.print_with_env(None, b))
+      // }
       match (&*this[a], &*this[b]) {
         (&Term::Var(a), &Term::Var(b)) => {
           for &(v1, v2) in ctx.iter().rev() {
@@ -560,6 +576,11 @@ pub trait HasTermStore:
   }
 
   fn frees(&self, free: &mut HashSet<VarId>, bound: &mut HashSet<VarId>, t: TermId) {
+    // if get_print() {
+    //   println!("free: {}, bound: {} = {}",
+    //     self.print_with_env(None, &*free),
+    //     self.print_with_env(None, &*bound), self.print_with_env(None, t))
+    // }
     match *self[t] {
       Term::Var(v) => if !bound.contains(&v) { free.insert(v); }
       Term::Const(_, _) => {}
@@ -567,7 +588,7 @@ pub trait HasTermStore:
       Term::Lam(v, t) => {
         let old = bound.insert(v);
         self.frees(free, bound, t);
-        if !old { bound.remove(&v); }
+        if old { bound.remove(&v); }
       }
     }
   }
@@ -697,7 +718,6 @@ impl<'a> TermArena<'a> {
   #[inline] pub fn mk_const0(&mut self, c: ConstId) -> TermId { self.mk_const(c, vec![]) }
 
   pub fn mk_int(&mut self, n: BigUint) -> TermId {
-
     let mut tm = self.mk_const0(ConstId::ZERO);
     if !n.is_zero() {
       for &i in n.to_radix_le(2).iter().rev() {
@@ -713,9 +733,10 @@ impl<'a> TermArena<'a> {
     let a = self.type_of(x);
     let (a2, b) = self.dest_fun(self.type_of(f));
     if a != a2 {
-      let tvr = &self.env.tyvars();
-      panic!("mk_app: type mismatch:\n{}\nis applied to\n{}",
-        self.pp_type(tvr, f), self.pp_type(tvr, x));
+      self.env.print(self, |p| {
+        panic!("mk_app: type mismatch:\n{}\nis applied to\n{}",
+          p.pp_type(f), p.pp_type(x))
+      });
     }
     self.tms.add_val(Term::App(f, x), b)
   }
@@ -899,6 +920,12 @@ impl<'a> TermArena<'a> {
   }
 }
 
+impl<'a, 'b> EnvPrint<'b, TermArena<'a>> {
+  pub fn pp_type(&'b self, t: TermId) -> impl std::fmt::Display + 'b {
+    self.arena.pp_type(self.tyvars, t)
+  }
+}
+
 pub struct TermInstType<'a, 'b, S> {
   pub arena: &'b mut TermArena<'a>,
   store: &'b S,
@@ -961,6 +988,9 @@ pub struct InstTerm {
 }
 
 impl InstTerm {
+  pub fn inst(&self) -> &HashMap<VarId, TermId> { &self.inst }
+  pub fn fvars(&self) -> &HashSet<VarId> { &self.fvars }
+
   fn insert(&mut self, arena: &impl HasTermStore, v: VarId, t: TermId) {
     if let Entry::Vacant(e) = self.inst.entry(v) {
       e.insert(t);
@@ -1111,6 +1141,11 @@ pub struct ProofTrace;
 #[derive(Default, Debug, Hash, PartialEq, Eq)]
 pub struct Hyps(Box<[TermId]>);
 
+impl Deref for Hyps {
+  type Target = [TermId];
+  fn deref(&self) -> &Self::Target { &*self.0 }
+}
+
 impl Hyps {
   fn contains(&self, arena: &impl HasTermStore, tm: TermId) -> bool {
     self.0.binary_search_by(|&a| arena.alpha_cmp(a, tm)).is_ok()
@@ -1192,6 +1227,11 @@ impl UnionHyps {
 pub struct Proof {
   hyps: HypsId,
   concl: TermId,
+}
+
+impl Proof {
+  #[inline] pub fn hyps(&self) -> HypsId { self.hyps }
+  #[inline] pub fn concl(&self) -> TermId { self.concl }
 }
 
 pub struct ProofStore {
@@ -1290,20 +1330,6 @@ impl<'a> ProofArena<'a> {
     Self { tms: TermArena::new(env), pfs: Dedup::default(), hyps }
   }
 
-  pub fn pp<'b>(&'b self, tvr: &'b TyVarRef<'b>, th: ProofId) -> impl std::fmt::Display + '_ {
-    struct PP<'a, 'b>(&'b TermArena<'a>, &'b TyVarRef<'b>, &'b [TermId], TermId);
-    impl std::fmt::Display for PP<'_, '_> {
-      fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for &hyp in self.2 {
-          write!(f, "{},\n", self.0.pp(self.1, hyp))?
-        }
-        write!(f, "|- {}", self.0.pp(self.1, self.3))
-      }
-    }
-    let Proof {hyps, concl} = *self[th];
-    PP(self, tvr, &*self[hyps].0, concl)
-  }
-
   fn union_hyps(&mut self, a: HypsId, b: HypsId) -> HypsId {
     if a == b || b == HypsId::EMPTY { return a }
     if a == HypsId::EMPTY { return b }
@@ -1325,6 +1351,10 @@ impl<'a> ProofArena<'a> {
 
   fn hyps_from_vec(&mut self, vec: Vec<TermId>) -> HypsId {
     self.hyps.add(Hyps::from_vec(&self.tms, vec))
+  }
+
+  pub fn pp<'b, T>(&'b self, tvr: &'b TyVarRef<'b>, t: T) -> Print<'b, Self, T> {
+    self.print_with_env(Some((self.env, tvr)), t)
   }
 
   pub fn axiom(&mut self, hyps: Vec<TermId>, concl: TermId) -> ProofId {
@@ -1362,9 +1392,9 @@ impl<'a> ProofArena<'a> {
   pub fn alpha_link0(&mut self, th: ProofId, concl2: TermId) -> ProofId {
     let Proof {hyps, concl} = *self[th];
     if !self.alpha_eq(concl, concl2) {
-      let tvr = &self.env.tyvars();
-      panic!("alpha_link0: mismatch\n  have: {}\n  want: {}",
-        self.tms.pp(tvr, concl), self.tms.pp(tvr, concl2));
+      self.env.panic(&self.tms, |p| {
+        panic!("alpha_link0: mismatch\n  have: {}\n  want: {}", p.pp(concl), p.pp(concl2));
+      })
     }
     assert_eq!(hyps, HypsId::EMPTY);
     self.add0(concl2)
@@ -1459,7 +1489,11 @@ impl<'a> ProofArena<'a> {
     let (p, q) = self.dest_disj(concl);
     let Proof {hyps: h1, concl: r1} = *self[th2];
     let Proof {hyps: h2, concl: r2} = *self[th3];
-    assert_eq!(r1, r2);
+    if !self.alpha_eq(r1, r2) {
+      self.env.panic(&self.tms, |p| {
+        panic!("disj_cases: mismatch\n  left: {}\n right: {}", p.pp(r1), p.pp(r2));
+      })
+    }
     let h1 = self.remove_hyp(h1, p);
     let h2 = self.remove_hyp(h2, q);
     let h12 = self.union_hyps(h1, h2);
@@ -1495,9 +1529,9 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps: h2, concl: th2} = *self[th2];
     let (p, q) = self.dest_eq(th1);
     if !self.alpha_eq(p, th2) {
-      let tvr = &self.env.tyvars();
-      panic!("eq_mp: mismatch\n  left: {}\n right: {}",
-        self.tms.pp(tvr, p), self.tms.pp(tvr, th2));
+      self.env.panic(&self.tms, |pp| {
+        panic!("eq_mp: mismatch\n  left: {}\n right: {}", pp.pp(p), pp.pp(th2))
+      })
     }
     thm!(self, add(self.union_hyps(h1, h2), q))
   }
@@ -1526,9 +1560,9 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps, concl} = *self[th];
     let p2 = self.inst_term_from(&[(x, t)], p);
     if !self.alpha_eq(p2, concl) {
-      let tvr = &self.env.tyvars();
-      panic!("exists: mismatch\n  left: {}\n right: {}",
-        self.tms.pp(tvr, p2), self.tms.pp(tvr, concl));
+      self.env.panic(&self.tms, |pp| {
+        panic!("exists: mismatch\n  left: {}\n right: {}", pp.pp(p2), pp.pp(concl))
+      })
     }
     thm!(self, add(hyps, tm))
   }
@@ -1545,9 +1579,10 @@ impl<'a> ProofArena<'a> {
     let (q2, p2) = self.dest_imp(th2);
     assert_eq!((p, q), (p2, q2));
     if !self.alpha_eq(p, p2) || !self.alpha_eq(q, q2) {
-      let tvr = &self.env.tyvars();
-      panic!("imp_antisymm: mismatch\n  left: {}\n right: {}",
-        self.tms.pp(tvr, th1), self.tms.pp(tvr, th2));
+      self.env.panic(&self.tms, |pp| {
+        panic!("imp_antisymm: mismatch\n  left: {}\n right: {}",
+          pp.pp(th1), pp.pp(th2))
+      })
     }
     thm!(self, add(self.union_hyps(h1, h2), p = q))
   }
@@ -1595,9 +1630,9 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps: h2, concl: th2} = *self[th2];
     let (p, q) = self.dest_imp(th1);
     if !self.alpha_eq(p, th2) {
-      let tvr = &self.env.tyvars();
-      panic!("mp: mismatch\n  left: {}\n right: {}",
-        self.tms.pp(tvr, p), self.tms.pp(tvr, th2));
+      self.env.panic(&self.tms, |pp| {
+        panic!("mp: mismatch\n  left: {}\n right: {}", pp.pp(p), pp.pp(th2));
+      })
     }
     thm!(self, add(self.union_hyps(h1, h2), q))
   }
@@ -1696,9 +1731,9 @@ impl<'a> ProofArena<'a> {
     let (a, b) = self.dest_eq(th1);
     let (b2, c) = self.dest_eq(th2);
     if !self.alpha_eq(b, b2) {
-      let tvr = &self.env.tyvars();
-      panic!("trans: mismatch\n  left: {}\n right: {}",
-        self.tms.pp(tvr, th1), self.tms.pp(tvr, th2));
+      self.env.panic(&self.tms, |p| {
+        panic!("trans: mismatch\n  left: {}\n right: {}", p.pp(th1), p.pp(th2))
+      })
     }
     thm!(self, add(self.union_hyps(h1, h2), a = c))
   }
@@ -1794,115 +1829,121 @@ impl<'a> ProofArena<'a> {
 
   pub fn eval_suc_conv(&mut self, tm: TermId) -> ProofId {
     let n = self.try_dest_unop(ConstId::SUC, tm).expect("eval_suc_conv: expected a SUC");
-    let mut n = self.dest_int(n);
+    let mut n = self.dest_int(false, n);
     n += 1u32;
     thm!(self, add0(tm = {self.mk_int(n)}))
   }
 
   pub fn eval_pre_conv(&mut self, tm: TermId) -> ProofId {
     let n = self.try_dest_unop(ConstId::PRE, tm).expect("eval_pre_conv: expected a PRE");
-    let mut n = self.dest_int(n);
+    let mut n = self.dest_int(false, n);
     if !n.is_zero() { n -= 1u32 }
     thm!(self, add0(tm = {self.mk_int(n)}))
   }
 
   pub fn eval_add_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::ADD, tm).expect("eval_add_conv: expected a +");
-    let mut a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let mut a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     a += b;
     thm!(self, add0(tm = {self.mk_int(a)}))
   }
 
   pub fn eval_sub_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::SUB, tm).expect("eval_sub_conv: expected a -");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     let c = a.checked_sub(&b).unwrap_or_else(BigUint::zero);
     thm!(self, add0(tm = {self.mk_int(c)}))
   }
 
   pub fn eval_mult_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::MULT, tm).expect("eval_mult_conv: expected a *");
-    let mut a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let mut a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     a *= b;
     thm!(self, add0(tm = {self.mk_int(a)}))
   }
 
   pub fn eval_exp_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::EXP, tm).expect("eval_exp_conv: expected an EXP");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     let c = a.pow(b.try_into().expect("eval_exp_conv: too big"));
     thm!(self, add0(tm = {self.mk_int(c)}))
   }
 
   pub fn eval_even_conv(&mut self, tm: TermId) -> ProofId {
     let n = self.try_dest_unop(ConstId::EVEN, tm).expect("eval_even_conv: expected an EVEN");
-    let n = self.dest_int(n);
+    let n = self.dest_int(false, n);
     thm!(self, add0(tm = {self.mk_bool_lit(!n.bit(0))}))
   }
 
   pub fn eval_odd_conv(&mut self, tm: TermId) -> ProofId {
     let n = self.try_dest_unop(ConstId::ODD, tm).expect("eval_odd_conv: expected an ODD");
-    let n = self.dest_int(n);
+    let n = self.dest_int(false, n);
     thm!(self, add0(tm = {self.mk_bool_lit(n.bit(0))}))
   }
 
   pub fn eval_eq_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.dest_eq(tm);
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     thm!(self, add0(tm = {self.mk_bool_lit(a == b)}))
   }
 
   pub fn eval_lt_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::LT, tm).expect("eval_lt_conv: expected a <");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     thm!(self, add0(tm = {self.mk_bool_lit(a < b)}))
   }
 
   pub fn eval_le_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::LE, tm).expect("eval_le_conv: expected a <=");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     thm!(self, add0(tm = {self.mk_bool_lit(a <= b)}))
   }
 
   pub fn eval_gt_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::GT, tm).expect("eval_gt_conv: expected a >");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     thm!(self, add0(tm = {self.mk_bool_lit(a > b)}))
   }
 
   pub fn eval_ge_conv(&mut self, tm: TermId) -> ProofId {
     let (a, b) = self.try_dest_bin(ConstId::GE, tm).expect("eval_ge_conv: expected a >=");
-    let a = self.dest_int(a);
-    let b = self.dest_int(b);
+    let a = self.dest_int(false, a);
+    let b = self.dest_int(false, b);
     thm!(self, add0(tm = {self.mk_bool_lit(a >= b)}))
   }
 }
 
 #[derive(Debug)]
 pub struct SubsInst {
-  map: HashMap<TermId, TermId>,
+  map: Vec<(TermId, TermId)>,
   hyps: UnionHyps,
   vars: HashSet<VarId>,
 }
 
 impl SubsInst {
+  pub fn map(&self) -> &[(TermId, TermId)] { &self.map }
+  pub fn hyps(&self) -> &[TermId] { &self.hyps.0 }
+  pub fn vars(&self) -> &HashSet<VarId> { &self.vars }
+
   pub fn new(arena: &ProofArena<'_>) -> Self {
-    Self { map: HashMap::new(), hyps: UnionHyps::new(arena), vars: HashSet::new() }
+    Self { map: Vec::new(), hyps: UnionHyps::new(arena), vars: HashSet::new() }
   }
 
   pub fn push(&mut self, arena: &impl HasProofStore, th: ProofId) {
     let Proof {hyps, concl} = *arena[th];
     let (a, b) = arena.dest_eq(concl);
     if a != b {
-      self.map.entry(a).or_insert(b);
+      if let Err(i) = self.map.binary_search_by(|x| arena.alpha_cmp(a, x.0)) {
+        self.map.insert(i, (a, b))
+      }
       let temp = &mut Default::default();
       arena.frees(&mut self.vars, temp, a);
       arena.frees(&mut self.vars, temp, b);
@@ -1911,7 +1952,9 @@ impl SubsInst {
   }
 
   fn apply(&self, arena: &mut ProofArena<'_>, a: TermId) -> TermId {
-    if let Some(&b) = self.map.get(&a) { return b }
+    if let Ok(i) = self.map.binary_search_by(|x| arena.alpha_cmp(a, x.0)) {
+      return self.map[i].1
+    }
     match *arena[a] {
       Term::App(a1, a2) => {
         let b1 = self.apply(arena, a1);
@@ -2021,7 +2064,6 @@ impl ThmDef {
 
 #[derive(Debug, Default)]
 pub struct Environment {
-  pub print: bool,
   tyvars: RefCell<Dedup<TyVar>>,
   pub tyops: Vec<TyopDef>,
   pub consts: Vec<ConstDef>,
@@ -2056,6 +2098,18 @@ impl Environment {
   }
 
   pub fn tyvars(&self) -> TyVarRef<'_> { TyVarRef(self.tyvars.borrow()) }
+
+  pub fn print<S: ?Sized>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>)) {
+    if get_print() {
+      let tyvars = self.tyvars();
+      f(EnvPrint { env: self, tyvars: &tyvars, arena })
+    }
+  }
+
+  pub fn panic<S: ?Sized, R>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>) -> R) -> R {
+    let tyvars = self.tyvars();
+    f(EnvPrint { env: self, tyvars: &tyvars, arena })
+  }
 
   pub fn add_tyop<'a>(&mut self,
     name: impl Into<Cow<'a, str>>, arity: u32, tydef: Option<ThmId>
@@ -2241,8 +2295,10 @@ impl Environment {
           let mut lhs = tr.arena.mk_const_natural(c);
           for e in args { lhs = term!(tr.arena, A lhs {tr.tr_term(e)}) }
           let mut concl = term!(tr.arena, lhs = {tr.tr_term(rhs)});
-          for x in vs2.into_iter().rev() { concl = tr.arena.mk_forall(x, concl) }
-          for x in vs1.into_iter().rev() { concl = tr.arena.mk_forall(x, concl) }
+          for x in vs2.into_iter().rev().chain(vs1.into_iter().rev()) {
+            let x = tr.tr_var(x);
+            concl = tr.arena.mk_forall(x, concl)
+          }
           concl
         });
         a.add0(concl)
