@@ -165,9 +165,9 @@ impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, TermId> {
   }
 }
 
-const TYPES: bool = false;
+const TYPES: bool = true;
 const CONST_TYPES: bool = false;
-const VAR_TYPES: bool = true;
+const VAR_TYPES: bool = false;
 const NUMERALS: bool = true;
 
 fn print_binder<S: HasTermStore + ?Sized>(

@@ -66,7 +66,8 @@ fn main() {
         }
       }
     }
-    println!("finished {} in {:?}, total {:?}", module, start.elapsed(), boot.elapsed());
+    println!("finished {} in {:.2}s, total {:.2}s", module,
+      start.elapsed().as_secs_f32(), boot.elapsed().as_secs_f32());
   }
   let env = importer.env;
   println!("success");
