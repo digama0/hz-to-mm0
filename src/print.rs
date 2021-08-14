@@ -77,9 +77,27 @@ where Print<'a, S, A>: Display, Print<'a, S, B>: Display {
   }
 }
 
+impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TyVarId> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    print_tyvar(self.env, self.t, f)
+  }
+}
+
 impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TypeId> {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     print_type(self.env, self.arena, self.t, 0, f)
+  }
+}
+
+fn print_tyvar(
+  env: Option<(&Environment, &TyVarRef<'_>)>,
+  v: TyVarId,
+  f: &mut Formatter<'_>
+) -> fmt::Result {
+  if let Some((_, tyvars)) = env {
+    write!(f, "{}", tyvars[v])
+  } else {
+    write!(f, "{}", v)
   }
 }
 
@@ -91,13 +109,7 @@ fn print_type(
   f: &mut Formatter<'_>
 ) -> fmt::Result {
   match *arena[ty] {
-    Type::TyVar(v) => {
-      if let Some((_, tyvars)) = env {
-        write!(f, "{}", tyvars[v])?;
-      } else {
-        write!(f, "{}", v)?
-      }
-    }
+    Type::TyVar(v) => print_tyvar(env, v, f)?,
     Type::Tyop(TyopId::FUN, ref args) => {
       if prec >= 5 { write!(f, "(")? }
       print_type(env, arena, args[0], 5, f)?;
@@ -143,7 +155,7 @@ impl Display for VarName {
 
 impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, VarId> {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    write!(f, "{}", self.arena[self.t].name)
+    print_var(self.env, self.arena, self.t, f)
   }
 }
 
@@ -155,7 +167,7 @@ impl<'a, S: HasTermStore + ?Sized> Display for Print<'a, S, TermId> {
 
 const TYPES: bool = false;
 const CONST_TYPES: bool = false;
-const VAR_TYPES: bool = false;
+const VAR_TYPES: bool = true;
 const NUMERALS: bool = true;
 
 fn print_binder<S: HasTermStore + ?Sized>(
@@ -187,6 +199,18 @@ fn print_binder<S: HasTermStore + ?Sized>(
   Ok(())
 }
 
+fn print_var(
+  env: Option<(&Environment, &TyVarRef<'_>)>,
+  arena: &(impl HasTermStore + ?Sized),
+  v: VarId,
+  f: &mut Formatter<'_>
+) -> fmt::Result {
+  let var = &arena[v];
+  write!(f, "{}", var.name)?;
+  if VAR_TYPES { write!(f, ":")?; print_type(env, arena, var.ty, u32::MAX, f)?; }
+  Ok(())
+}
+
 fn print_term(
   env: Option<(&Environment, &TyVarRef<'_>)>,
   arena: &(impl HasTermStore + ?Sized),
@@ -195,11 +219,7 @@ fn print_term(
   f: &mut Formatter<'_>
 ) -> fmt::Result {
   match *arena[tm] {
-    Term::Var(v) => {
-      let var = &arena[v];
-      write!(f, "{}", var.name)?;
-      if VAR_TYPES { write!(f, ":")?; print_type(env, arena, var.ty, u32::MAX, f)?; }
-    }
+    Term::Var(v) => print_var(env, arena, v, f)?,
     Term::Const(ConstId::FORALL, _) => write!(f, "(!)")?,
     Term::Const(ConstId::EXISTS, _) => write!(f, "(?)")?,
     Term::Const(ConstId::EQ, _) => write!(f, "(=)")?,

@@ -166,36 +166,36 @@ impl Environment {
     assert_eq!(ConstId::BIT1, env.parse_def("BIT1", 1,
       &[num_ty], &[vn], "L t1 (A (K \"SUC\") (A (K \"BIT0\") t1))").0);
     // PRE 0 = 0 /\ (!n. PRE (SUC n) = n))
-    let ([c], pre) = env.parse_spec(&["PRE"], &[num_ty, "F z1 z1"],
+    let ([c], pre) = env.parse_spec("PRE_SPEC", &["PRE"], &[num_ty, "F z1 z1"],
       &["V \"PRE\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) t2) (U t4 (E (A t1 (A t3 t4)) t4)))");
     assert_eq!(c, ConstId::PRE);
     // (!n. 0 + n = n) /\ (!m n. SUC m + n = SUC (m + n))
-    let ([c], add) = env.parse_spec(&["+"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], add) = env.parse_spec("ADD_SPEC", &["+"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"+\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t5 (E (B t1 t2 t5) t5)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (A t3 (B t1 t4 t5))))))");
     assert_eq!(c, ConstId::ADD);
     // (!n. 0 * n = 0) /\ (!m n. SUC m * n = m * n + n)
-    let ([c], _) = env.parse_spec(&["*"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], _) = env.parse_spec("MULT_SPEC", &["*"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"*\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t5 (E (B t1 t2 t5) t2)) \
                (U t4 (U t5 (E (B t1 (A t3 t4) t5) (B (K \"+\") (B t1 t4 t5) t5)))))");
     assert_eq!(c, ConstId::MULT);
     // (!m. m EXP 0 = 1) /\ (!m n. m EXP SUC n = m * m EXP n)
-    let ([c], exp) = env.parse_spec(&["EXP"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], exp) = env.parse_spec("EXP_SPEC", &["EXP"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"EXP\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t4 t2) (M 1))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (B (K \"*\") t4 (B t1 t4 t5))))))");
     assert_eq!(c, ConstId::EXP);
     // (!m. m <= 0 <=> m = 0) /\ (!m n. m <= SUC n <=> m = SUC n \/ m <= n)
-    let ([c], _) = env.parse_spec(&["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+    let ([c], _) = env.parse_spec("LE_SPEC", &["<="], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<=\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t4 t2) (E t4 t2))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 (A t3 t4)) (B t1 t4 t5))))))");
     assert_eq!(c, ConstId::LE);
     // (!m. m < 0 <=> F) /\ (!m n. m < SUC n <=> m = n \/ m < n)
-    let ([c], lt) = env.parse_spec(&["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
+    let ([c], lt) = env.parse_spec("LT_SPEC", &["<"], &[num_ty, "F z1 (F z1 (K \"bool\"))"],
       &["V \"<\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1"],
       "X t1 (C (U t4 (E (B t1 t4 t2) (K \"F\"))) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (D (E t4 t5) (B t1 t4 t5))))))");
@@ -207,17 +207,17 @@ impl Environment {
     assert_eq!(ConstId::GT, env.parse_def(">", 2, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
       "L t1 (L t2 (B (K \"<\") t2 t1))").0);
     // (EVEN 0 <=> T) /\ (!n. EVEN (SUC n) <=> ~EVEN n)
-    let ([c], even) = env.parse_spec(&["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
+    let ([c], even) = env.parse_spec("EVEN_SPEC", &["EVEN"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"EVEN\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) (K \"T\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
     assert_eq!(c, ConstId::EVEN);
     // (ODD 0 <=> F) /\ (!n. ODD (SUC n) <=> ~ODD n)
-    let ([c], _) = env.parse_spec(&["ODD"], &[num_ty, "F z1 (K \"bool\")"],
+    let ([c], _) = env.parse_spec("ODD_SPEC", &["ODD"], &[num_ty, "F z1 (K \"bool\")"],
       &["V \"ODD\" z2", "M 0", suc, "V \"n\" z1"],
       "X t1 (C (E (A t1 t2) (K \"F\")) (U t4 (E (A t1 (A t3 t4)) (N (A t1 t4)))))");
     assert_eq!(c, ConstId::ODD);
     // (!m. m - 0 = m) /\ (!m n. m - SUC n = PRE (m - n))
-    let ([c], sub) = env.parse_spec(&["-"], &[num_ty, "F z1 (F z1 z1)"],
+    let ([c], sub) = env.parse_spec("SUB_SPEC", &["-"], &[num_ty, "F z1 (F z1 z1)"],
       &["V \"-\" z2", "M 0", suc, "V \"m\" z1", "V \"n\" z1", "K \"PRE\""],
       "X t1 (C (U t4 (E (B t1 t4 t2) t4)) \
                (U t4 (U t5 (E (B t1 t4 (A t3 t5)) (A t6 (B t1 t4 t5))))))");

@@ -79,7 +79,10 @@ macro_rules! idx {($($ty:ident),*) => {
   )*
 }}
 
-idx! { TyopId, ConstId, ThmId, TyVarId, TypeId, VarId, TermId, HypsId, ProofId }
+idx! {
+  TyopId, ConstId, SpecId, ExternId, ThmId, TyVarId,
+  TypeId, VarId, TermId, HypsId, ProofId
+}
 
 #[derive(Default, Debug)]
 pub struct TransTable {
@@ -159,4 +162,10 @@ pub struct ThmDef {
   pub tyvars: Box<[TyVarId]>,
   pub hyps: Box<[TermId]>,
   pub concl: TermId,
+}
+
+#[derive(Debug)]
+pub struct SpecDef {
+  pub orig: ThmDef,
+  pub consts: Box<[ConstId]>,
 }

@@ -3,11 +3,12 @@
 use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
-use crate::kernel::{Environment, HasTermStore, HasTypeStore,
-  OwnedTerm, OwnedType, ProofArena, SubsInst, TermArena, TypeArena, get_print};
+use crate::kernel::{Environment, HasTermStore, HasTypeStore, OwnedTerm, OwnedType, ProofArena,
+  SubsInst, TermArena, TypeArena, get_print};
 use crate::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
@@ -408,7 +409,7 @@ impl<'a> TermArena<'a> {
           TTerm(i) => { next!(); State::Ret(tms[i as usize]) }
           Char('(') => { next!(); stk.push(Stack::Paren); State::Start }
           Ident("V") => { next!();
-            parse! { lexer, tk; let x = Str(v) => v.to_owned(), let n = TType(v) => tys[v as usize], }
+            parse! { lexer, tk; let x = Str(v) => v.into(), let n = TType(v) => tys[v as usize], }
             State::Ret(self.mk_var_term(x, n).1)
           }
           Ident("K") => { next!();
@@ -743,7 +744,7 @@ impl<'a> ProofArena<'a> {
           parse! { lexer, tk; Char(']'), }
           match l {
             VarThmList::Subst => { stk.push(Stack::Unary(Unary::Subst(args, term!()))); State::Start }
-            VarThmList::SubstConv => State::Ret(self.subst_conv(&args, term!(), term!())),
+            VarThmList::SubstConv => State::Ret(self.subst_conv(args, term!(), term!())),
           }
         }
         State::Ret(pr) => match stk.pop() {
@@ -793,7 +794,7 @@ impl<'a> ProofArena<'a> {
             Unary::SelectRule => State::Ret(self.select_rule(pr)),
             Unary::Spec(tm) => State::Ret(self.spec(tm, pr)),
             Unary::Subs(sub) => State::Ret(self.subs(sub, pr)),
-            Unary::Subst(sub, tm) => State::Ret(self.subst(&sub, tm, pr)),
+            Unary::Subst(sub, tm) => State::Ret(self.subst(sub, tm, pr)),
             Unary::Sym => State::Ret(self.sym(pr)),
             Unary::Undisch => State::Ret(self.undisch(pr)),
             Unary::Quant(q, v) => State::Ret(self.eq_quant(q, v, pr)),
@@ -965,49 +966,74 @@ impl Environment {
       a.parse_term_str(&tys, &tms, tm)
     })
   }
-  pub fn parse_thm_def(&mut self, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmDef {
+
+  pub fn parse_thm_def(&mut self, src: ExternId,
+    tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
+  ) -> ThmDef {
     ThmDef::with(self, |a| {
       let tys = a.parse_type_str_preamble(tys);
       let tms = a.parse_term_str_preamble(&tys, tms);
       let hyps = hyps.iter().map(|h| a.parse_term_str(&tys, &tms, h)).collect();
       let concl = a.parse_term_str(&tys, &tms, concl);
-      a.axiom(hyps, concl)
+      a.extern_axiom(hyps, concl, src)
     })
   }
+
   pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
     let ty = self.parse_owned_type(tys, ty);
     self.add_const(x, ty)
   }
-  pub fn parse_basic_def(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> (ConstId, ThmId) {
+
+  pub fn parse_basic_def(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str
+  ) -> (ConstId, ThmId) {
     let tm = self.parse_owned_term(tys, tms, tm);
     self.add_basic_def(x, tm)
   }
-  pub fn parse_def(&mut self, x: &str, arity: u32, tys: &[&str], tms: &[&str], tm: &str) -> (ConstId, ThmId) {
+
+  pub fn parse_def(&mut self, x: &str, arity: u32, tys: &[&str], tms: &[&str], tm: &str
+  ) -> (ConstId, ThmId) {
     let tm = self.parse_owned_term(tys, tms, tm);
     self.add_simple_def(x, arity, tm)
   }
-  pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
-    let tm = self.parse_thm_def(tys, tms, &[], tm);
-    self.add_basic_typedef(x, tm)
+
+  pub fn parse_basic_typedef2(&mut self, x: &str, ext: &str, tys: &[&str], tms: &[&str], tm: &str
+  ) -> TyopId {
+    let ext = self.extern_by_name(ext);
+    let td = self.parse_thm_def(ext, tys, tms, &[], tm);
+    self.add_basic_typedef(x, td)
   }
-  pub fn parse_thm(&mut self, k: FetchKind,
-    x: &str, tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str) -> ThmId {
-    let th = self.parse_thm_def(tys, tms, hyps, concl);
+
+  pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
+    self.parse_basic_typedef2(x, x, tys, tms, tm)
+  }
+
+  pub fn parse_thm2(&mut self, k: FetchKind, x: &str, ext: &str,
+    tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
+  ) -> ThmId {
+    let ext = self.extern_by_name(ext);
+    let th = self.parse_thm_def(ext, tys, tms, hyps, concl);
     self.add_thm(k, x, th)
   }
-  pub fn parse_spec<const N: usize>(&mut self,
+
+  pub fn parse_thm(&mut self, k: FetchKind, x: &str,
+    tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
+  ) -> ThmId {
+    self.parse_thm2(k, x, x, tys, tms, hyps, concl)
+  }
+
+  pub fn parse_spec<const N: usize>(&mut self, ext: &str,
     xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str
   ) -> ([ConstId; N], ThmId) {
-    let th = self.parse_thm_def(tys, tms, &[], tm);
+    let ext = self.extern_by_name(ext);
+    let th = self.parse_thm_def(ext, tys, tms, &[], tm);
     let (cs, th) = self.add_spec(xs, th);
     (cs.try_into().unwrap(), th)
   }
 }
 
 impl Importer {
-  pub fn import(&mut self, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
-    println!("=============== {:?}", kind);
-    let file = self.mpath.join(&data.file);
+  pub fn import(&mut self, mpath: &Path, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
+    let file = mpath.join(&data.file);
     let mut lexer = Lexer::from(File::open(file).unwrap().bytes().map(Result::unwrap));
     let mut tk = lexer.next();
     use Token::{Heading, Ident, Char, Str};
@@ -1110,6 +1136,8 @@ impl Importer {
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
+        println!("thm {}", x);
+        // set_print(x == "FASHODA");
         let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);

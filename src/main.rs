@@ -15,37 +15,56 @@ use kernel::Environment;
 
 struct Importer {
   env: Environment,
-  mpath: PathBuf,
   deferred: VecDeque<(ObjectSpec, ObjectData)>,
 }
 
 fn main() {
   let rpath = PathBuf::from("../flyspeck");
-  let mdl = "BaseSystem";
-  let mpath = rpath.join(mdl);
-  let summary = mpath.join("SUMMARY");
-  let summary = Summary::from(File::open(summary).unwrap().bytes().map(Result::unwrap));
-  assert_eq!(summary.hol_system, "HOL Light");
-  let env = Environment::new();
+  let modules = [
+    "BaseSystem",
+    "Multivariate",
+    "Start",
+    "TrigNonlinear",
+    "Volume",
+    "Hypermap",
+    "Fan",
+    "Packing",
+    "Local1",
+    "Tame1",
+    "Local2",
+    "Local3",
+    "Local4",
+    "Local5",
+    "Tame2",
+    "Tame3",
+    "End"
+  ];
   let mut importer = Importer {
-    env,
-    mpath,
+    env: Environment::new(),
     deferred: Default::default(),
   };
-  for (kind, data) in summary {
-    importer.import(kind, data, true);
-  }
-  let mut failures = 0;
-  let mut defer = true;
-  while let Some((kind, data)) = importer.deferred.pop_front() {
-    if importer.import(kind, data, defer) {
-      failures = 0;
-    } else {
-      failures += 1;
-      if failures >= importer.deferred.len() {
-        defer = false;
+  for module in modules {
+    println!("importing {}", module);
+    let mpath = rpath.join(module);
+    let summary = mpath.join("SUMMARY");
+    let summary = Summary::from(File::open(summary).unwrap().bytes().map(Result::unwrap));
+    assert_eq!(summary.hol_system, "HOL Light");
+    for (kind, data) in summary {
+      importer.import(&mpath, kind, data, true);
+    }
+    let mut failures = 0;
+    let mut defer = true;
+    while let Some((kind, data)) = importer.deferred.pop_front() {
+      if importer.import(&mpath, kind, data, defer) {
+        failures = 0;
+      } else {
+        failures += 1;
+        if failures >= importer.deferred.len() {
+          defer = false;
+        }
       }
     }
+    println!("finished {}", module);
   }
   let mut types: Vec<_> = importer.env.counts.into_iter().collect();
   types.sort_by(|a, b| a.1.cmp(&b.1));
