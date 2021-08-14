@@ -5,13 +5,13 @@ mod corethy;
 mod types;
 mod print;
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, time::Instant};
 use std::fs::File;
 use std::path::PathBuf;
 use std::io::Read;
 use parser::Summary;
-use types::{ObjectData, ObjectSpec};
-use kernel::Environment;
+use types::{ObjectData, ObjectSpec, FetchKind};
+use kernel::{Environment, set_print};
 
 struct Importer {
   env: Environment,
@@ -43,8 +43,10 @@ fn main() {
     env: Environment::new(),
     deferred: Default::default(),
   };
+  let boot = Instant::now();
   for module in modules {
     println!("importing {}", module);
+    let start = Instant::now();
     let mpath = rpath.join(module);
     let summary = mpath.join("SUMMARY");
     let summary = Summary::from(File::open(summary).unwrap().bytes().map(Result::unwrap));
@@ -64,9 +66,12 @@ fn main() {
         }
       }
     }
-    println!("finished {}", module);
+    println!("finished {} in {:?}, total {:?}", module, start.elapsed(), boot.elapsed());
   }
-  let mut types: Vec<_> = importer.env.counts.into_iter().collect();
-  types.sort_by(|a, b| a.1.cmp(&b.1));
-  println!("{:?}", types)
+  let env = importer.env;
+  println!("success");
+  let thm = "kepler_conjecture_with_assumptions";
+  let td = &env[*env.trans.fetches[FetchKind::Thm].get(thm).expect("theorem not found")];
+  set_print(true);
+  env.print(&td.arena, |p| println!("{}:\n{}", thm, p.pp(td.concl)));
 }

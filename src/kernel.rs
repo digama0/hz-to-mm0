@@ -2180,7 +2180,6 @@ pub struct Environment {
   pub specs: Vec<SpecDef>,
   pub thms: Vec<ThmDef>,
   pub trans: TransTable,
-  pub counts: HashMap<&'static str, (u32, u32)>,
 }
 
 impl Index<TyopId> for Environment {

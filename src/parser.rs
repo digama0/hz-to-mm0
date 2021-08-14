@@ -1033,6 +1033,10 @@ impl Environment {
 
 impl Importer {
   pub fn import(&mut self, mpath: &Path, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
+    if self.env.trans.contains(&kind) {
+      eprintln!("skipping duplicated proof {:?}", &kind);
+      return true
+    }
     let file = mpath.join(&data.file);
     let mut lexer = Lexer::from(File::open(file).unwrap().bytes().map(Result::unwrap));
     let mut tk = lexer.next();
@@ -1136,7 +1140,7 @@ impl Importer {
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
-        println!("thm {}", x);
+        // println!("thm {}", x);
         // set_print(x == "FASHODA");
         let pr = ThmDef::with(&self.env, |a| {
           let p = a.parse_preambles(&mut tk, &mut lexer);
