@@ -1,6 +1,4 @@
 use std::borrow::Borrow;
-use std::cell::Ref;
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -11,8 +9,8 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ops::Index;
 use std::ops::IndexMut;
-use std::rc::Rc;
 use std::borrow::Cow;
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use bitvec::{bitbox, prelude::BitBox};
 use num::{BigUint, Zero, CheckedSub};
@@ -31,17 +29,17 @@ impl Node for Hyps { type Idx = HypsId; }
 
 pub static PRINT: AtomicBool = AtomicBool::new(false);
 
-pub fn get_print() -> bool { PRINT.load(SeqCst) }
-pub fn set_print(b: bool) { PRINT.store(b, SeqCst) }
+#[allow(unused)] pub fn get_print() -> bool { PRINT.load(SeqCst) }
+#[allow(unused)] pub fn set_print(b: bool) { PRINT.store(b, SeqCst) }
 
 #[derive(Debug)]
-pub struct Store<H: ?Sized, A = ()>(Vec<(Rc<H>, A)>);
+pub struct Store<H: ?Sized, A = ()>(Vec<(Arc<H>, A)>);
 
 impl<H: ?Sized, A: Clone> Clone for Store<H, A> {
   fn clone(&self) -> Self { Self(self.0.clone()) }
 }
 impl<H: Node + ?Sized, A> Index<H::Idx> for Store<H, A> {
-  type Output = (Rc<H>, A);
+  type Output = (Arc<H>, A);
   fn index(&self, n: H::Idx) -> &Self::Output {
     &self.0[n.into_usize()]
   }
@@ -58,7 +56,7 @@ impl<H: ?Sized, A> Default for Store<H, A> {
 
 #[derive(Debug)]
 struct Dedup<H: ?Sized, A = ()> {
-  map: HashMap<Rc<H>, u32>,
+  map: HashMap<Arc<H>, u32>,
   store: Store<H, A>,
 }
 
@@ -67,7 +65,7 @@ impl<H: ?Sized, A> Default for Dedup<H, A> {
 }
 
 impl<H: Node + ?Sized, A> Index<H::Idx> for Dedup<H, A> {
-  type Output = (Rc<H>, A);
+  type Output = (Arc<H>, A);
   fn index(&self, n: H::Idx) -> &Self::Output { &self.store[n] }
 }
 
@@ -76,7 +74,7 @@ impl<H: Node + ?Sized, A> IndexMut<H::Idx> for Dedup<H, A> {
 }
 
 impl<H: Node + ?Sized, A> Dedup<H, A> {
-  fn add_inner(&mut self, v: Rc<H>, a: A) -> (H::Idx, bool) {
+  fn add_inner(&mut self, v: Arc<H>, a: A) -> (H::Idx, bool) {
     match self.map.entry(v) {
       Entry::Vacant(e) => {
         let vec = &mut self.store.0;
@@ -91,9 +89,9 @@ impl<H: Node + ?Sized, A> Dedup<H, A> {
 }
 
 impl<H: Node, A> Dedup<H, A> {
-  #[inline] fn add_val(&mut self, v: H, a: A) -> H::Idx { self.add_inner(Rc::new(v), a).0 }
+  #[inline] fn add_val(&mut self, v: H, a: A) -> H::Idx { self.add_inner(Arc::new(v), a).0 }
   #[inline] fn add_default(&mut self, v: H) -> (H::Idx, bool) where A: Default {
-    self.add_inner(Rc::new(v), A::default())
+    self.add_inner(Arc::new(v), A::default())
   }
 }
 impl<H: Node> Dedup<H> {
@@ -105,7 +103,7 @@ pub type TyVar = str;
 #[derive(Debug, Clone, Default)]
 pub struct TypeStore(pub Store<Type>);
 
-pub trait HasTypeStore: Index<TypeId, Output=Rc<Type>> {
+pub trait HasTypeStore: Index<TypeId, Output=Arc<Type>> {
   fn type_store(&self) -> &Store<Type>;
 
   fn dest_tyvar(&self, a: TypeId) -> TyVarId {
@@ -127,9 +125,9 @@ pub trait HasTypeStore: Index<TypeId, Output=Rc<Type>> {
     matches!(*self[ty], Type::Tyop(TyopId::BOOL, _))
   }
 
-  fn types(&self) -> &[(Rc<Type>, ())] { &self.type_store().0 }
+  fn types(&self) -> &[(Arc<Type>, ())] { &self.type_store().0 }
 
-  fn print_with_env<'a, T>(&'a self, env: Option<(&'a Environment, &'a TyVarRef<'a>)>, t: T) -> Print<'a, Self, T> {
+  fn print_with_env<'a, T>(&'a self, env: Option<&'a EnvRef<'a>>, t: T) -> Print<'a, Self, T> {
     Print {env, arena: self, t}
   }
 
@@ -142,8 +140,8 @@ pub trait HasTypeStore: Index<TypeId, Output=Rc<Type>> {
 
 macro_rules! impl_index { ($ty:ty: $($tgt:ty => $f:ident),*) => {$(
   impl Index<<$tgt as Node>::Idx> for $ty {
-    type Output = Rc<$tgt>;
-    fn index(&self, n: <$tgt as Node>::Idx) -> &Rc<$tgt> { &self.$f()[n].0 }
+    type Output = Arc<$tgt>;
+    fn index(&self, n: <$tgt as Node>::Idx) -> &Arc<$tgt> { &self.$f()[n].0 }
   }
 )*}}
 
@@ -281,7 +279,7 @@ impl<'a> TypeArena<'a> {
   }
 
   pub fn mk_tyop(&mut self, c: TyopId, tys: Vec<TypeId>) -> TypeId {
-    assert_eq!(self.env[c].arity as usize, tys.len());
+    assert_eq!(self.env.read()[c].arity as usize, tys.len());
     self.tys.add(Type::Tyop(c, tys))
   }
 
@@ -318,8 +316,9 @@ impl<'a> TypeArena<'a> {
     }
   }
 
-  pub fn pp<'b, T>(&'b self, tvr: &'b TyVarRef<'b>, t: T) -> Print<'b, Self, T> {
-    self.print_with_env(Some((self.env, tvr)), t)
+  #[allow(unused)]
+  pub fn pp<'b, T>(&'b self, env: &'b EnvRef<'b>, t: T) -> Print<'b, Self, T> {
+    self.print_with_env(Some(env), t)
   }
 }
 
@@ -379,7 +378,7 @@ impl<'a, 'b, S: TypeArenaPair<'a>> TypeTranslator<'b, S> {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum VarName {
-  Str(Rc<str>),
+  Str(Arc<str>),
   Genvar(u32),
 }
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -397,15 +396,15 @@ pub struct TermStore {
 
 pub trait HasTermStore:
   HasTypeStore +
-  Index<VarId, Output=Rc<Var>> +
-  Index<TermId, Output=Rc<Term>>
+  Index<VarId, Output=Arc<Var>> +
+  Index<TermId, Output=Arc<Term>>
 {
   fn var_store(&self) -> &Store<Var>;
   fn term_store(&self) -> &Store<Term, TypeId>;
 
-  fn vars(&self) -> &[(Rc<Var>, ())] { &self.var_store().0 }
+  fn vars(&self) -> &[(Arc<Var>, ())] { &self.var_store().0 }
 
-  fn terms(&self) -> &[(Rc<Term>, TypeId)] { &self.term_store().0 }
+  fn terms(&self) -> &[(Arc<Term>, TypeId)] { &self.term_store().0 }
 
   fn type_of(&self, tm: TermId) -> TypeId { self.term_store()[tm].1 }
 
@@ -715,7 +714,7 @@ impl<'a> TermArena<'a> {
     (v, self.tms.add_val(Term::Var(v), ty))
   }
 
-  pub fn mk_var_term(&mut self, x: Rc<str>, ty: TypeId) -> (VarId, TermId) {
+  pub fn mk_var_term(&mut self, x: Arc<str>, ty: TypeId) -> (VarId, TermId) {
     let v = self.mk_var_id(VarName::Str(x), ty);
     (v, self.tms.add_val(Term::Var(v), ty))
   }
@@ -725,15 +724,16 @@ impl<'a> TermArena<'a> {
   }
 
   pub fn mk_const(&mut self, c: ConstId, tys: Vec<TypeId>) -> TermId {
-    assert_eq!(tys.len(), self.tys.env[c].ty.tyvars.len());
+    let ty = &self.tys.env.read()[c].ty;
+    assert_eq!(tys.len(), ty.tyvars.len());
     self.add_self(Term::Const(c, tys), |this, n| {
       let tys = if let Term::Const(_, tys) = &*this.tms[n].0 { tys } else { unreachable!() };
-      this.tys.inst_owned(tys, &this.tys.env[c].ty)
+      this.tys.inst_owned(tys, ty)
     })
   }
 
   pub fn mk_const_natural(&mut self, c: ConstId) -> TermId {
-    let tys = self.env[c].ty.tyvars.iter().map(|&v| self.mk_tyvar(v)).collect();
+    let tys = self.env.read()[c].ty.tyvars.iter().map(|&v| self.mk_tyvar(v)).collect();
     self.mk_const(c, tys)
   }
 
@@ -887,12 +887,12 @@ impl<'a> TermArena<'a> {
     map.apply(self, tm)
   }
 
-  pub fn pp<'b, T>(&'b self, tvr: &'b TyVarRef<'b>, t: T) -> Print<'b, Self, T> {
-    self.print_with_env(Some((self.env, tvr)), t)
+  pub fn pp<'b, T>(&'b self, env: &'b EnvRef<'b>, t: T) -> Print<'b, Self, T> {
+    self.print_with_env(Some(env), t)
   }
 
-  pub fn pp_type<'b>(&'b self, tvr: &'b TyVarRef<'b>, t: TermId) -> impl std::fmt::Display + '_ {
-    struct PP<'a, 'b>(&'b TermArena<'a>, &'b TyVarRef<'b>, TermId);
+  pub fn pp_type<'b>(&'b self, env: &'b EnvRef<'b>, t: TermId) -> impl std::fmt::Display + '_ {
+    struct PP<'a, 'b>(&'b TermArena<'a>, &'b EnvRef<'b>, TermId);
     impl std::fmt::Display for PP<'_, '_> {
       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}",
@@ -900,13 +900,13 @@ impl<'a> TermArena<'a> {
           self.0.pp(self.1, self.0.type_of(self.2)))
       }
     }
-    PP(self, tvr, t)
+    PP(self, env, t)
   }
 }
 
 impl<'a, 'b> EnvPrint<'b, TermArena<'a>> {
   pub fn pp_type(&'b self, t: TermId) -> impl std::fmt::Display + 'b {
-    self.arena.pp_type(self.tyvars, t)
+    self.arena.pp_type(self.env, t)
   }
 }
 
@@ -1308,7 +1308,7 @@ impl Hyps {
 }
 
 #[derive(Debug)]
-struct UnionHyps(Rc<Hyps>);
+struct UnionHyps(Arc<Hyps>);
 
 impl UnionHyps {
   fn new(arena: &ProofArena<'_>) -> Self { Self(arena[HypsId::EMPTY].clone()) }
@@ -1319,7 +1319,7 @@ impl UnionHyps {
     if self.0 .0.is_empty() { return self.0 = other.clone() }
     if other.is_subset(arena, &self.0) { return }
     if self.0.is_subset(arena, other) { return self.0 = other.clone() }
-    self.0 = Rc::new(self.0.union(arena, other));
+    self.0 = Arc::new(self.0.union(arena, other));
   }
 
   fn finish(self, arena: &mut ProofArena<'_>) -> HypsId { arena.hyps.add_inner(self.0, ()).0 }
@@ -1344,15 +1344,15 @@ pub struct ProofStore {
 
 pub trait HasProofStore:
   HasTermStore +
-  Index<HypsId, Output=Rc<Hyps>> +
-  Index<ProofId, Output=Rc<Proof>>
+  Index<HypsId, Output=Arc<Hyps>> +
+  Index<ProofId, Output=Arc<Proof>>
 {
   fn hyps_store(&self) -> &Store<Hyps>;
   fn proof_store(&self) -> &Store<Proof, ProofTrace>;
 
-  fn hyps(&self) -> &[(Rc<Hyps>, ())] { &self.hyps_store().0 }
+  fn hyps(&self) -> &[(Arc<Hyps>, ())] { &self.hyps_store().0 }
 
-  fn proofs(&self) -> &[(Rc<Proof>, ProofTrace)] { &self.proof_store().0 }
+  fn proofs(&self) -> &[(Arc<Proof>, ProofTrace)] { &self.proof_store().0 }
 
   fn trace_of(&self, th: ProofId) -> &ProofTrace { &self.proof_store()[th].1 }
 }
@@ -1455,8 +1455,8 @@ impl<'a> ProofArena<'a> {
     self.hyps.add(Hyps::from_vec(&self.tms, vec))
   }
 
-  pub fn pp<'b, T>(&'b self, tvr: &'b TyVarRef<'b>, t: T) -> Print<'b, Self, T> {
-    self.print_with_env(Some((self.env, tvr)), t)
+  pub fn pp<'b, T>(&'b self, env: &'b EnvRef<'b>, t: T) -> Print<'b, Self, T> {
+    self.print_with_env(Some(env), t)
   }
 
   pub fn extern_axiom(&mut self, hyps: Vec<TermId>, concl: TermId, src: ExternId) -> ProofId {
@@ -1465,7 +1465,7 @@ impl<'a> ProofArena<'a> {
   }
 
   pub fn fetch(&mut self, th: ThmId, tys: Vec<TypeId>) -> ProofId {
-    let d = &self.env[th];
+    let d = &self.env.read()[th].clone();
     let (inst, tys) = if tys.is_empty() {
       (Default::default(), d.tyvars.iter().map(|&n| self.mk_tyvar(n)).collect())
     } else {
@@ -1495,7 +1495,7 @@ impl<'a> ProofArena<'a> {
   pub fn alpha_link0(&mut self, th: ProofId, concl2: TermId) -> ProofId {
     let Proof {hyps, concl} = *self[th];
     if !self.alpha_eq(concl, concl2) {
-      self.env.panic(&self.tms, |p| {
+      self.env.print_always(&self.tms, |p| {
         panic!("alpha_link0: mismatch\n  have: {}\n  want: {}", p.pp(concl), p.pp(concl2));
       })
     }
@@ -1593,7 +1593,7 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps: h1, concl: r1} = *self[th2];
     let Proof {hyps: h2, concl: r2} = *self[th3];
     if !self.alpha_eq(r1, r2) {
-      self.env.panic(&self.tms, |p| {
+      self.env.print_always(&self.tms, |p| {
         panic!("disj_cases: mismatch\n  left: {}\n right: {}", p.pp(r1), p.pp(r2));
       })
     }
@@ -1632,7 +1632,7 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps: h2, concl: concl2} = *self[th2];
     let (p, q) = self.dest_eq(concl1);
     if !self.alpha_eq(p, concl2) {
-      self.env.panic(&self.tms, |pp| {
+      self.env.print_always(&self.tms, |pp| {
         panic!("eq_mp: mismatch\n  left: {}\n right: {}", pp.pp(p), pp.pp(concl2))
       })
     }
@@ -1663,7 +1663,7 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps, concl} = *self[th];
     let p2 = self.inst_term_from(&[(x, t)], p);
     if !self.alpha_eq(p2, concl) {
-      self.env.panic(&self.tms, |pp| {
+      self.env.print_always(&self.tms, |pp| {
         panic!("exists: mismatch\n  left: {}\n right: {}", pp.pp(p2), pp.pp(concl))
       })
     }
@@ -1681,7 +1681,7 @@ impl<'a> ProofArena<'a> {
     let (p, q) = self.dest_imp(concl1);
     let (q2, p2) = self.dest_imp(concl2);
     if !self.alpha_eq(p, p2) || !self.alpha_eq(q, q2) {
-      self.env.panic(&self.tms, |pp| {
+      self.env.print_always(&self.tms, |pp| {
         panic!("imp_antisymm: mismatch\n  left: {}\n right: {}",
           pp.pp(concl1), pp.pp(concl2))
       })
@@ -1695,7 +1695,7 @@ impl<'a> ProofArena<'a> {
     let (p, q) = self.dest_imp(concl1);
     let (q2, r) = self.dest_imp(concl2);
     if !self.alpha_eq(q, q2) {
-      self.env.panic(&self.tms, |pp| {
+      self.env.print_always(&self.tms, |pp| {
         panic!("imp_trans: mismatch\n  left: {}\n right: {}",
           pp.pp(concl1), pp.pp(concl2))
       })
@@ -1722,7 +1722,7 @@ impl<'a> ProofArena<'a> {
   }
 
   pub fn inst_type(&mut self, inst: HashMap<TyVarId, TypeId>, th: ProofId) -> ProofId {
-    // self.env.panic(self, |p| println!("inst_type {} {}", p.pp(&inst), p.pp(th)));
+    // self.env.print_always(self, |p| println!("inst_type {} {}", p.pp(&inst), p.pp(th)));
     let Proof {hyps, concl} = *self[th];
     let (hyps, concl) = TermArenaPair::term_inst_type(self, &inst, |mut tr| (
       tr.tytr.arena.hyps_store()[hyps].0.clone().iter().map(|&h| tr.tr_term(h)).collect(),
@@ -1736,7 +1736,7 @@ impl<'a> ProofArena<'a> {
     let Proof {hyps: h2, concl: concl2} = *self[th2];
     let (p, q) = self.dest_imp(concl1);
     if !self.alpha_eq(p, concl2) {
-      self.env.panic(&self.tms, |pp| {
+      self.env.print_always(&self.tms, |pp| {
         panic!("mp: mismatch\n  left: {}\n right: {}", pp.pp(p), pp.pp(concl2));
       })
     }
@@ -1837,7 +1837,7 @@ impl<'a> ProofArena<'a> {
     let (a, b) = self.dest_eq(concl1);
     let (b2, c) = self.dest_eq(concl2);
     if !self.alpha_eq(b, b2) {
-      self.env.panic(&self.tms, |p| {
+      self.env.print_always(&self.tms, |p| {
         panic!("trans: mismatch\n  left: {}\n right: {}", p.pp(concl1), p.pp(concl2))
       })
     }
@@ -1905,18 +1905,6 @@ impl<'a> ProofArena<'a> {
 
   pub fn eq_app2(&mut self, tm: TermId, th: ProofId) -> ProofId {
     self.mk_eq_fn1(ProofTrace::App2(th), th, |this, t| this.mk_app(tm, t))
-  }
-
-  pub fn eq_bin(&mut self, f: TermId, th1: ProofId, th2: ProofId) -> ProofId {
-    self.mk_eq_fn2(ProofTrace::Bin(th1, th2), th1, th2, |this, t1, t2| this.mk_app2(f, t1, t2))
-  }
-
-  pub fn eq_bin1(&mut self, f: TermId, th: ProofId, tm: TermId) -> ProofId {
-    self.mk_eq_fn1(ProofTrace::Bin1(th), th, |this, t| this.mk_app2(f, t, tm))
-  }
-
-  pub fn eq_bin2(&mut self, f: TermId, tm: TermId, th: ProofId) -> ProofId {
-    self.mk_eq_fn1(ProofTrace::App2(th), th, |this, t| this.mk_app2(f, tm, t))
   }
 
   pub fn eq_binary(&mut self, b: Binary, x: ProofId, y: ProofId) -> ProofId {
@@ -2173,108 +2161,154 @@ impl ThmDef {
 // }
 
 #[derive(Debug, Default)]
-pub struct Environment {
-  tyvars: RefCell<Dedup<TyVar>>,
+pub struct EnvironmentInner {
+  tyvars: Dedup<TyVar>,
   pub tyops: Vec<TyopDef>,
   pub consts: Vec<ConstDef>,
-  pub specs: Vec<SpecDef>,
-  pub thms: Vec<ThmDef>,
+  pub specs: Arc<Mutex<Vec<SpecDef>>>,
+  pub thms: Vec<Arc<ThmDef>>,
   pub trans: TransTable,
 }
 
-impl Index<TyopId> for Environment {
+impl Index<TyVarId> for EnvironmentInner {
+  type Output = Arc<str>;
+  fn index(&self, n: TyVarId) -> &Arc<str> { &self.tyvars[n].0 }
+}
+impl Index<TyopId> for EnvironmentInner {
   type Output = TyopDef;
   fn index(&self, n: TyopId) -> &Self::Output { &self.tyops[n.into_usize()] }
 }
-impl Index<ConstId> for Environment {
+impl Index<ConstId> for EnvironmentInner {
   type Output = ConstDef;
   fn index(&self, n: ConstId) -> &Self::Output { &self.consts[n.into_usize()] }
 }
-impl Index<ThmId> for Environment {
-  type Output = ThmDef;
+impl Index<ThmId> for EnvironmentInner {
+  type Output = Arc<ThmDef>;
   fn index(&self, n: ThmId) -> &Self::Output { &self.thms[n.into_usize()] }
 }
 
-pub struct TyVarRef<'a>(Ref<'a, Dedup<TyVar>>);
+impl EnvironmentInner {
+  pub fn mk_tyvar(&mut self, x: Arc<TyVar>) -> TyVarId { self.tyvars.add_inner(x, ()).0 }
 
-impl Index<TyVarId> for TyVarRef<'_> {
-  type Output = Rc<TyVar>;
-  fn index(&self, n: TyVarId) -> &Self::Output { &self.0[n].0 }
-}
-
-impl Environment {
-  pub fn mk_tyvar(&self, x: Rc<TyVar>) -> TyVarId {
-    self.tyvars.borrow_mut().add_inner(x, ()).0
-  }
-
-  pub fn tyvars(&self) -> TyVarRef<'_> { TyVarRef(self.tyvars.borrow()) }
-
-  pub fn print<S: ?Sized>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>)) {
-    if get_print() {
-      let tyvars = self.tyvars();
-      f(EnvPrint { env: self, tyvars: &tyvars, arena })
-    }
-  }
-
-  pub fn panic<S: ?Sized, R>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>) -> R) -> R {
-    let tyvars = self.tyvars();
-    f(EnvPrint { env: self, tyvars: &tyvars, arena })
-  }
-
-  pub fn extern_by_name<'a>(&mut self, _x: &str) -> ExternId {
+  pub fn extern_by_name<'a>(&self, _x: &str) -> ExternId {
     ExternId(0)
   }
 
-  pub fn add_tyop<'a>(&mut self,
-    name: impl Into<Cow<'a, str>>, arity: u32, tydef: Option<ThmId>
-  ) -> TyopId {
+  pub fn add_tyop<'a>(&mut self, td: TyopDef) -> TyopId {
+    let name = td.name.clone();
     let n = Idx::from(self.tyops.len() as u32);
-    let name = name.into().into_owned();
-    self.tyops.push(TyopDef {name: name.clone(), arity, tydef});
+    self.tyops.push(td);
     assert!(self.trans.tyops.insert(name, n).is_none());
     n
   }
 
-  pub fn add_const<'a>(&mut self, name: impl Into<Cow<'a, str>>, ty: OwnedType) -> ConstId {
+  pub fn add_const<'a>(&mut self, cd: ConstDef) -> ConstId {
+    let name = cd.name.clone();
+    // println!("adding constant {}", name);
     let n = Idx::from(self.consts.len() as u32);
-    let name = name.into().into_owned();
-    self.consts.push(ConstDef {name: name.clone(), ty});
+    self.consts.push(cd);
     assert!(self.trans.consts.insert(name, n).is_none());
     n
   }
 
   pub fn add_anon_thm<'a>(&mut self, d: ThmDef) -> ThmId {
     let n = Idx::from(self.thms.len() as u32);
-    self.thms.push(d);
+    self.thms.push(Arc::new(d));
     n
   }
 
-  pub fn add_thm_alias<'a>(&mut self, k: FetchKind, name: impl Into<Cow<'a, str>>, th: ThmId) {
-    match self.trans.fetches[k].entry(name.into().into_owned()) {
+  pub fn add_thm_alias<'a>(&mut self, k: FetchKind, name: String, th: ThmId) {
+    match self.trans.fetches[k].entry(name) {
       Entry::Vacant(e) => { e.insert(th); }
       Entry::Occupied(e) => panic!("{:?} {:?} already exists", k, e.key())
     }
   }
 
-  pub fn add_thm<'a>(&mut self, k: FetchKind, name: impl Into<Cow<'a, str>>, d: ThmDef) -> ThmId {
+  pub fn add_thm<'a>(&mut self, k: FetchKind, name: String, d: ThmDef) -> ThmId {
     let n = self.add_anon_thm(d);
     self.add_thm_alias(k, name, n);
     n
   }
+}
 
-  pub fn add_type_bijs<'a>(&mut self, c: TyopId, cname: &str,
+#[derive(Debug, Default)]
+pub struct Environment(RwLock<EnvironmentInner>);
+
+pub struct EnvRef<'a>(RwLockReadGuard<'a, EnvironmentInner>);
+pub struct EnvRefMut<'a>(RwLockWriteGuard<'a, EnvironmentInner>);
+
+impl Deref for EnvRef<'_> {
+  type Target = EnvironmentInner;
+  fn deref(&self) -> &Self::Target { &*self.0 }
+}
+impl Deref for EnvRefMut<'_> {
+  type Target = EnvironmentInner;
+  fn deref(&self) -> &Self::Target { &*self.0 }
+}
+impl DerefMut for EnvRefMut<'_> {
+  fn deref_mut(&mut self) -> &mut Self::Target { &mut *self.0 }
+}
+
+impl EnvRef<'_> {
+  pub fn print<S: ?Sized>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>)) {
+    if get_print() { self.print_always(arena, f) }
+  }
+
+  pub fn print_always<S: ?Sized, R>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>) -> R) -> R {
+    f(EnvPrint { env: self, arena })
+  }
+}
+
+impl Environment {
+  pub fn read(&self) -> EnvRef<'_> { EnvRef(self.0.read().unwrap()) }
+  pub fn write(&self) -> EnvRefMut<'_> { EnvRefMut(self.0.write().unwrap()) }
+  pub fn mk_tyvar(&self, x: Arc<TyVar>) -> TyVarId { self.write().mk_tyvar(x) }
+
+  #[allow(unused)]
+  pub fn extern_by_name<'a>(&self, x: &str) -> ExternId { self.read().extern_by_name(x) }
+
+  pub fn print<S: ?Sized>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>)) {
+    self.read().print(arena, f)
+  }
+
+  pub fn print_always<S: ?Sized, R>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>) -> R) -> R {
+    self.read().print_always(arena, f)
+  }
+
+  pub fn add_tyop<'a>(&self,
+    name: impl Into<Cow<'a, str>>, arity: u32, tydef: Option<ThmId>
+  ) -> TyopId {
+    self.write().add_tyop(TyopDef {name: name.into().into_owned(), arity, tydef})
+  }
+
+  pub fn add_const<'a>(&self, name: impl Into<Cow<'a, str>>, ty: OwnedType) -> ConstId {
+    self.write().add_const(ConstDef {name: name.into().into_owned(), ty})
+  }
+
+  pub fn add_anon_thm<'a>(&self, d: ThmDef) -> ThmId { self.write().add_anon_thm(d) }
+
+  pub fn add_thm_alias<'a>(&self, k: FetchKind, name: impl Into<Cow<'a, str>>, th: ThmId) {
+    self.write().add_thm_alias(k, name.into().into_owned(), th)
+  }
+
+  pub fn add_thm<'a>(&self, k: FetchKind, name: impl Into<Cow<'a, str>>, d: ThmDef) -> ThmId {
+    self.write().add_thm(k, name.into().into_owned(), d)
+  }
+
+  pub fn add_type_bijs<'a>(&self, c: TyopId, cname: &str,
     abs: impl Into<Cow<'a, str>>, rep: impl Into<Cow<'a, str>>
   ) -> (ConstId, ConstId, ThmId, ThmId) {
     let abs = abs.into(); let rep = rep.into();
-    let exists_p = *self.tyops[c.into_usize()].tydef
+    let env = self.read();
+    let exists_p = *env[c].tydef
       .as_ref().expect("add_type_bijs: not a type operator");
-    let ThmDef {arena: ref store, concl, ..} = self.thms[exists_p.into_usize()];
+    let ThmDef {arena: ref store, concl, ..} = *env[exists_p].clone();
+    drop(env);
     let (p, v) = store.dest_app(store.dest_exists(concl).1);
     let ty = store.type_of(v);
     let mut tyargs = store.tyvars_in_term(p);
-    {
-      let tyvars = self.tyvars.borrow();
-      tyargs.sort_by_key(|&v| &tyvars[v])
+    match &self.read().tyvars {
+      tyvars => tyargs.sort_by_key(|&v| &*tyvars[v].0)
     }
     let absc = OwnedType::with(self, |a| {
       // abs[v0..vn]: A -> C[v0..vn]
@@ -2284,7 +2318,6 @@ impl Environment {
       ty!(a, aty -> cty)
     });
     let absc = self.add_const(&*abs, absc);
-    let store = &self.thms[exists_p.into_usize()].arena;
     let repc = OwnedType::with(self, |a| {
       // rep[v0..vn]: C[v0..vn] -> A
       let aty = a.import(&store.tys, |mut tr| tr.tr(ty));
@@ -2303,7 +2336,6 @@ impl Environment {
       a.add0(concl, ProofTrace::NewTypeBij1(c))
     });
     let abs_rep = self.add_thm(FetchKind::TypeBij1, cname, abs_rep);
-    let store = &self.thms[exists_p.into_usize()].arena;
     let rep_abs = ThmDef::with(self, |a| {
       let t = &mut a.tms;
       let abs = t.mk_const_natural(absc);
@@ -2318,7 +2350,7 @@ impl Environment {
     (absc, repc, abs_rep, rep_abs)
   }
 
-  pub fn add_basic_def<'a>(&mut self, x: impl Into<Cow<'a, str>>, tm: OwnedTerm
+  pub fn add_basic_def<'a>(&self, x: impl Into<Cow<'a, str>>, tm: OwnedTerm
   ) -> (ConstId, ThmId) {
     let x = x.into();
     let ty = OwnedType::with(self, |a| {
@@ -2333,7 +2365,7 @@ impl Environment {
     (c, self.add_thm(FetchKind::BasicDef, x, th))
   }
 
-  pub fn add_simple_def<'a>(&mut self, x: impl Into<Cow<'a, str>>, arity: u32, tm: OwnedTerm
+  pub fn add_simple_def<'a>(&self, x: impl Into<Cow<'a, str>>, arity: u32, tm: OwnedTerm
   ) -> (ConstId, ThmId) {
     let x = x.into();
     let (c, th) = self.add_basic_def(&*x, tm);
@@ -2341,7 +2373,7 @@ impl Environment {
       self.add_thm_alias(FetchKind::Def, x, th);
       (c, th)
     } else {
-      let ThmDef {ref arena, concl, ..} = self[th];
+      let ThmDef {ref arena, concl, ..} = *self.read()[th].clone();
       let th = ThmDef::with(self, |a| {
         let concl = a.tms.import(arena, |mut tr| {
           let (lhs, mut rhs) = arena.dest_eq(concl);
@@ -2366,7 +2398,7 @@ impl Environment {
     }
   }
 
-  pub fn add_def<'a>(&mut self, x: impl Into<Cow<'a, str>>,
+  pub fn add_def<'a>(&self, x: impl Into<Cow<'a, str>>,
     OwnedTerm {arena: old, term, ..}: OwnedTerm) -> (ConstId, ThmId) {
     fn untuple(e: TermId, old: &TermStore, gv: TermId,
       tr: &mut TermImporter<'_, '_, '_, TermStore>,
@@ -2424,14 +2456,14 @@ impl Environment {
     }
   }
 
-  pub fn add_basic_typedef<'a>(&mut self, x: impl Into<Cow<'a, str>>, th: ThmDef) -> TyopId {
+  pub fn add_basic_typedef<'a>(&self, x: impl Into<Cow<'a, str>>, th: ThmDef) -> TyopId {
     let x = x.into();
     let arity = th.tyvars.len() as u32;
     let exists_p = self.add_anon_thm(th);
     self.add_tyop(&*x, arity, Some(exists_p))
   }
 
-  pub fn add_spec<'a>(&mut self, xs: &[impl Borrow<str>], td: ThmDef) -> (Vec<ConstId>, ThmId) {
+  pub fn add_spec<'a>(&self, xs: &[impl Borrow<str>], td: ThmDef) -> (Vec<ConstId>, ThmId) {
     assert!(td.hyps.is_empty());
     let mut term = td.concl;
     let mut subst: Vec<(VarId, ConstId)> = vec![];
@@ -2452,7 +2484,9 @@ impl Environment {
       subst.push((v, c));
       term = body;
     }
-    let spec = Idx::from(self.specs.len() as u32);
+    let specs = self.read().specs.clone();
+    let mut specs = specs.lock().unwrap();
+    let spec = Idx::from(specs.len() as u32);
     let n = self.add_anon_thm(ThmDef::with(self, |a| {
       let concl = a.tms.import(&td.arena, |mut tr| {
         let t = tr.tr_term(term);
@@ -2466,13 +2500,13 @@ impl Environment {
       });
       a.add0(concl, ProofTrace::NewSpec(spec))
     }));
-    for x in xs { self.add_thm_alias(FetchKind::Spec, x.borrow(), n) }
+    for x in xs { self.add_thm_alias(FetchKind::Spec, x.borrow().to_owned(), n) }
     let consts: Vec<_> = subst.into_iter().map(|p| p.1).collect();
-    self.specs.push(SpecDef {orig: td, consts: (&*consts).into()});
+    specs.push(SpecDef {orig: td, consts: (&*consts).into()});
     (consts, n)
   }
 
-  pub fn add_axiom(&mut self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
+  pub fn add_axiom(&self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
     assert!(arena.is_boolean(term));
     self.add_thm(FetchKind::Axiom, x, ThmDef {arena, tyvars, hyps: Box::new([]), concl: term})
   }

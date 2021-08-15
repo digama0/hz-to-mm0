@@ -20,6 +20,20 @@ pub enum ObjectSpec {
   TypeBij(Box<[String; 3]>),
 }
 
+impl ObjectSpec {
+  pub fn sync(&self) -> bool {
+    matches!(self,
+      ObjectSpec::TypeDecl(_) |
+      ObjectSpec::BasicTypedef(_) |
+      ObjectSpec::Typedef(_) |
+      ObjectSpec::ConstDecl(_) |
+      ObjectSpec::BasicDef(_) |
+      ObjectSpec::Def(_) |
+      ObjectSpec::Spec(_) |
+      ObjectSpec::TypeBij(_))
+  }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FetchKind {
   Axiom,

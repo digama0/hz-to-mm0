@@ -3,7 +3,8 @@
 use std::convert::{TryFrom, TryInto};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::Importer;
 use crate::lexer::{Token, PackedToken, Lexer};
@@ -295,7 +296,7 @@ impl<'a> TypeArena<'a> {
             State::Ret(self.mk_tyvar(x))
           }
           Some(Ident("K")) => { tk = lexer.next();
-            parse! { lexer, tk; let x = Str(v) => self.env.trans.tyops[v], }
+            parse! { lexer, tk; let x = Str(v) => self.env.read().trans.tyops[v], }
             stk.push(Stack::Tyop(x, vec![]));
             State::Start
           }
@@ -413,7 +414,11 @@ impl<'a> TermArena<'a> {
             State::Ret(self.mk_var_term(x, n).1)
           }
           Ident("K") => { next!();
-            parse! { lexer, tk; let x = Str(v) => self.env.trans.consts[v], }
+            parse! { lexer, tk;
+              let x = Str(v) => *self.env.read().trans.consts.get(v).unwrap_or_else(|| {
+                with_current_obj(|s| panic!("missing constant {} in {}", v, s))
+              }),
+            }
             let mut args = vec![];
             while let Some(TType(i)) = tk {
               next!();
@@ -618,8 +623,8 @@ impl<'a> ProofArena<'a> {
     loop {
       if get_print() {
         if let State::Ret(th) = state {
-          let tvr = &self.env.tyvars();
-          println!("{:?}: {}", th, self.pp(tvr, th))
+          let env = &self.env.read();
+          println!("{:?}: {}", th, self.pp(env, th))
         }
         println!("{:?}: state = {:?}, stack = {:?}\n", tk, state, stk);
       }
@@ -925,7 +930,7 @@ impl<'a> ProofArena<'a> {
         tk = lexer.next();
         parse! { lexer, tk; Eols,
           let k = Token::Ident(v) => FetchKind::try_from(v).unwrap(),
-          let thm = Token::Str(v) => *self.env.trans.fetches[k].get(v)
+          let thm = Token::Str(v) => *self.env.read().trans.fetches[k].get(v)
             .unwrap_or_else(|| panic!("can't find {:?} {:?}", k, v)),
         }
         let mut args = vec![];
@@ -998,7 +1003,7 @@ impl Environment {
 
   pub fn parse_basic_typedef2(&mut self, x: &str, ext: &str, tys: &[&str], tms: &[&str], tm: &str
   ) -> TyopId {
-    let ext = self.extern_by_name(ext);
+    let ext = self.read().extern_by_name(ext);
     let td = self.parse_thm_def(ext, tys, tms, &[], tm);
     self.add_basic_typedef(x, td)
   }
@@ -1010,7 +1015,7 @@ impl Environment {
   pub fn parse_thm2(&mut self, k: FetchKind, x: &str, ext: &str,
     tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
   ) -> ThmId {
-    let ext = self.extern_by_name(ext);
+    let ext = self.read().extern_by_name(ext);
     let th = self.parse_thm_def(ext, tys, tms, hyps, concl);
     self.add_thm(k, x, th)
   }
@@ -1024,36 +1029,41 @@ impl Environment {
   pub fn parse_spec<const N: usize>(&mut self, ext: &str,
     xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str
   ) -> ([ConstId; N], ThmId) {
-    let ext = self.extern_by_name(ext);
+    let ext = self.read().extern_by_name(ext);
     let th = self.parse_thm_def(ext, tys, tms, &[], tm);
     let (cs, th) = self.add_spec(xs, th);
     (cs.try_into().unwrap(), th)
   }
 }
 
-impl Importer {
-  pub fn import(&mut self, mpath: &Path, kind: ObjectSpec, data: ObjectData, defer: bool) -> bool {
-    if self.env.trans.contains(&kind) {
-      eprintln!("skipping duplicated proof {:?}", &kind);
-      return true
-    }
-    let file = mpath.join(&data.file);
-    let mut lexer = Lexer::from(File::open(file).unwrap().bytes().map(Result::unwrap));
+fn with_current_obj<R>(f: impl FnOnce(&mut String) -> R) -> R {
+  thread_local! {
+    static CURRENT_OBJ: Mutex<String> = Default::default();
+  }
+  CURRENT_OBJ.with(|s| f(&mut *s.lock().unwrap()))
+}
+
+impl Environment {
+  pub fn parse_header<I: Iterator<Item=u8>>(&self,
+    kind_: &ObjectSpec, it: I) -> (Lexer<I>, Option<PackedToken>, Vec<ObjectSpec>) {
+    // println!("starting {:?}", kind_);
+    let mut lexer = Lexer::from(it);
     let mut tk = lexer.next();
     use Token::{Heading, Ident, Char, Str};
-    parse! { lexer, tk; let kind_ = Heading(v) => ObjectSpec::try_from(v).unwrap(), Eols, }
-    let mut kind_ = kind_;
+    parse! { lexer, tk; let kind = Heading(v) => ObjectSpec::try_from(v).unwrap(), Eols, }
+    let mut kind = kind;
     let mut args = vec![];
     while let Some(Str(v)) = tk {
       args.push(v.to_owned());
       tk = lexer.next();
     }
-    kind_.set_args(args);
-    assert_eq!(kind, kind_);
+    kind.set_args(args);
+    assert_eq!(kind_, &kind);
     let _fl2 = matches!(tk, Some(Char('*'))) && { tk = lexer.next(); true };
     parse! { lexer, tk; Eols, }
-    let mut inherits = vec![];
+    let mut deps = vec![];
     if let Some(Heading("Inherit")) = tk {
+      let env = self.read();
       tk = lexer.next(); parse! { lexer, tk; Eols, }
       while let Some(Ident(v)) = tk {
         let mut kind = ObjectSpec::try_from(Abbrev(v)).unwrap();
@@ -1064,23 +1074,30 @@ impl Importer {
           tk = lexer.next();
         }
         kind.set_args(args);
-        inherits.push(kind);
-        parse! { lexer, tk; Eols, }
-      }
-    }
-    for k in inherits {
-      if !self.env.trans.contains(&k) {
-        if defer {
-          self.deferred.push_back((kind, data));
-          return false
+        if !env.trans.contains(&kind) {
+          deps.push(kind);
         }
-        panic!("missing inherited object: {:?}", k);
+        parse! { lexer, tk; Eols, }
       }
     }
     if !matches!(kind, ObjectSpec::TypeBij(_)) {
       parse! { lexer, tk; Heading(""), Eols, }
     }
-    let mut tk = tk.map(Token::pack);
+    let tk = tk.map(Token::pack);
+    (lexer, tk, deps)
+  }
+}
+
+impl Importer {
+  pub async fn import_core(&self, kind: ObjectSpec, file: PathBuf) {
+    if self.env.read().trans.contains(&kind) {
+      eprintln!("skipping duplicated proof {:?}", kind);
+      return
+    }
+    let (mut lexer, mut tk, deps) = self.env.parse_header(&kind,
+      File::open(file).unwrap().bytes().map(Result::unwrap));
+    for k in deps { self.depend(&k).await }
+    with_current_obj(|s| *s = format!("{:?}", kind));
     match kind {
       ObjectSpec::TypeDecl(x) => {
         let arity = parse_int_section(&mut tk, &mut lexer);
@@ -1136,7 +1153,7 @@ impl Importer {
       ObjectSpec::Typedef(_) => unimplemented!(),
       ObjectSpec::TypeBij(xs) => {
         let [x, x1, x2] = *xs;
-        let c = self.env.trans.tyops[&x];
+        let c = self.env.read().trans.tyops[&x];
         self.env.add_type_bijs(c, &x, x1, x2);
       }
       ObjectSpec::Thm(x) => {
@@ -1168,6 +1185,5 @@ impl Importer {
       }
     };
     assert!(matches!(tk, None));
-    true
   }
 }

@@ -6,19 +6,18 @@ use crate::kernel::*;
 
 #[derive(Clone, Copy)]
 pub struct EnvPrint<'a, S: ?Sized> {
-  pub env: &'a Environment,
-  pub tyvars: &'a TyVarRef<'a>,
+  pub env: &'a EnvRef<'a>,
   pub arena: &'a S,
 }
 
 impl<'a, S: ?Sized> EnvPrint<'a, S> {
   pub fn pp<T>(&self, t: T) -> Print<'a, S, T> {
-    Print { env: Some((self.env, self.tyvars)), arena: self.arena, t}
+    Print { env: Some(self.env), arena: self.arena, t}
   }
 }
 
 pub struct Print<'a, S: ?Sized, T> {
-  pub env: Option<(&'a Environment, &'a TyVarRef<'a>)>,
+  pub env: Option<&'a EnvRef<'a>>,
   pub arena: &'a S,
   pub t: T,
 }
@@ -90,19 +89,19 @@ impl<'a, S: HasTypeStore + ?Sized> Display for Print<'a, S, TypeId> {
 }
 
 fn print_tyvar(
-  env: Option<(&Environment, &TyVarRef<'_>)>,
+  env: Option<&EnvRef<'_>>,
   v: TyVarId,
   f: &mut Formatter<'_>
 ) -> fmt::Result {
-  if let Some((_, tyvars)) = env {
-    write!(f, "{}", tyvars[v])
+  if let Some(env) = env {
+    write!(f, "{}", env[v])
   } else {
     write!(f, "{}", v)
   }
 }
 
 fn print_type(
-  env: Option<(&Environment, &TyVarRef<'_>)>,
+  env: Option<&EnvRef<'_>>,
   arena: &(impl HasTypeStore + ?Sized),
   ty: TypeId,
   prec: u32,
@@ -125,7 +124,7 @@ fn print_type(
       if prec >= 10 { write!(f, ")")? }
     }
     Type::Tyop(tyop, ref args) => {
-      if let Some((env, _)) = env {
+      if let Some(env) = env {
         write!(f, "{}", env[tyop].name)?;
       } else {
         write!(f, "_{}", tyop.0)?;
@@ -171,7 +170,7 @@ const VAR_TYPES: bool = false;
 const NUMERALS: bool = true;
 
 fn print_binder<S: HasTermStore + ?Sized>(
-  env: Option<(&Environment, &TyVarRef<'_>)>,
+  env: Option<&EnvRef<'_>>,
   arena: &S,
   s: &str,
   prec: u32,
@@ -200,7 +199,7 @@ fn print_binder<S: HasTermStore + ?Sized>(
 }
 
 fn print_var(
-  env: Option<(&Environment, &TyVarRef<'_>)>,
+  env: Option<&EnvRef<'_>>,
   arena: &(impl HasTermStore + ?Sized),
   v: VarId,
   f: &mut Formatter<'_>
@@ -212,7 +211,7 @@ fn print_var(
 }
 
 fn print_term(
-  env: Option<(&Environment, &TyVarRef<'_>)>,
+  env: Option<&EnvRef<'_>>,
   arena: &(impl HasTermStore + ?Sized),
   tm: TermId,
   prec: u32,
@@ -227,7 +226,7 @@ fn print_term(
     Term::Const(ConstId::SUB, _) => write!(f, "(-)")?,
     Term::Const(ConstId::MULT, _) => write!(f, "(*)")?,
     Term::Const(c, ref args) => {
-      if let Some((env, _)) = env { write!(f, "{}", env[c].name)? } else { write!(f, "C{}", c.0)? }
+      if let Some(env) = env { write!(f, "{}", env[c].name)? } else { write!(f, "C{}", c.0)? }
       if CONST_TYPES {
         if let Some((&first, rest)) = args.split_first() {
           write!(f, "[")?;
