@@ -15,9 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use bitvec::{bitbox, prelude::BitBox};
 use num::{BigUint, Zero, CheckedSub};
 
-use crate::print::EnvPrint;
-use crate::print::Print;
-use crate::types::*;
+use super::print::EnvPrint;
+use super::print::Print;
+use super::types::*;
 
 pub trait Node: Hash + Eq { type Idx: Idx; }
 impl Node for TyVar { type Idx = TyVarId; }

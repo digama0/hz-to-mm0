@@ -1,9 +1,11 @@
-mod lexer;
-mod parser;
-pub mod kernel;
-mod corethy;
-mod types;
-mod print;
+mod hol {
+  pub mod lexer;
+  pub mod parser;
+  pub mod kernel;
+  pub mod corethy;
+  pub mod types;
+  pub mod print;
+}
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -13,9 +15,9 @@ use std::time::Instant;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::io::Read;
-use parser::Summary;
-use types::{FetchKind, ObjectSpec};
-use kernel::Environment;
+use hol::parser::Summary;
+use hol::types::{FetchKind, ObjectSpec};
+use hol::kernel::Environment;
 
 struct Importer {
   env: Environment,

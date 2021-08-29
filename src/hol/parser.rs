@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::Importer;
-use crate::lexer::{Token, PackedToken, Lexer};
-use crate::kernel::{Environment, HasTermStore, HasTypeStore, OwnedTerm, OwnedType, ProofArena,
+use super::lexer::{Token, PackedToken, Lexer};
+use super::kernel::{Environment, HasTermStore, HasTypeStore, OwnedTerm, OwnedType, ProofArena,
   SubsInst, TermArena, TypeArena, get_print};
-use crate::types::*;
+use super::types::*;
 
 const COMMONHOL_VERSION: &str = "0.5";
 // const HOL_ZERO: &str = "HOL Zero";

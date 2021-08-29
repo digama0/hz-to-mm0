@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Index, IndexMut};
 
-use crate::kernel::{OwnedType, TermStore};
+use super::kernel::{OwnedType, TermStore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ObjectSpec {

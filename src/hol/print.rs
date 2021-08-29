@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Debug, Formatter};
 
-use crate::types::*;
-use crate::kernel::*;
+use super::types::*;
+use super::kernel::*;
 
 #[derive(Clone, Copy)]
 pub struct EnvPrint<'a, S: ?Sized> {

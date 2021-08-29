@@ -1,5 +1,5 @@
-use crate::kernel::Environment;
-use crate::types::{ConstId, FetchKind, TyopId};
+use super::kernel::Environment;
+use super::types::{ConstId, FetchKind, TyopId};
 
 impl TyopId {
   pub const BOOL:    Self = Self(0);
