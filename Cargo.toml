@@ -9,3 +9,5 @@ edition = "2018"
 num = "0.4"
 bitvec = "0.22"
 tokio = { version = "1.10", features = ["rt", "rt-multi-thread", "sync", "time"] }
+mm0_util = "0.1"
+mm0b_parser = "0.1"

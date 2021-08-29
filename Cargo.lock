@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
+name = "bitflags"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da1976d75adbe5fbc88130ecd119529cf1cc6a93ae1546d8696ee66f0d21af1"
+
+[[package]]
 name = "bitvec"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21,18 +27,107 @@ dependencies = [
 ]
 
 [[package]]
+name = "byteorder"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
+
+[[package]]
 name = "funty"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1847abb9cb65d566acd5942e94aea9c8f547ad02c98e1649326fc0e8910b8b1e"
 
 [[package]]
+name = "hermit-abi"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62b467343b94ba476dcb2500d242dadbb39557df889310ac77c5d99100aaac33"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "hz-to-mm0"
 version = "0.1.0"
 dependencies = [
  "bitvec",
+ "mm0_util",
+ "mm0b_parser",
  "num",
+ "tokio",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
+name = "libc"
+version = "0.2.99"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7f823d141fe0a24df1e23b4af4e3c7ba9e5966ec514ea068c93024aa7deb765"
+
+[[package]]
+name = "memchr"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b16bd47d9e329435e309c58469fe0791c2d0d1ba96ec0954152a5ae2b04387dc"
+
+[[package]]
+name = "mm0_deepsize"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e84f8531413398f7110dbcc126428ed097b51efaa59cafb626130a736daee6f"
+dependencies = [
+ "mm0_deepsize_derive",
+]
+
+[[package]]
+name = "mm0_deepsize_derive"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d347f3395472eb8f5de502facb8c0bcccb73269d257c32c69e6bafad5246cb1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "mm0_util"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0656febda2b873c44007c5fa112b558d21fb631b29945d9dd7a75fd420fa692a"
+dependencies = [
+ "bitflags",
+ "lazy_static",
+ "libc",
+ "mm0_deepsize",
+ "mm0_deepsize_derive",
+ "pathdiff",
+ "procinfo",
+]
+
+[[package]]
+name = "mm0b_parser"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4179809b89e582e27d0da81e2ed6c48a94da2c35794035fd73cd87688431680d"
+dependencies = [
+ "byteorder",
+ "memchr",
+ "mm0_util",
+ "zerocopy",
+]
+
+[[package]]
+name = "nom"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf51a729ecf40266a2368ad335a5fdde43471f545a967109cd62146ecf8b66ff"
 
 [[package]]
 name = "num"
@@ -111,10 +206,109 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
+dependencies = [
+ "hermit-abi",
+ "libc",
+]
+
+[[package]]
+name = "pathdiff"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877630b3de15c0b64cc52f659345724fbf6bdad9bd9566699fc53688f3c34a34"
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d31d11c69a6b52a174b42bdc0c30e5e11670f90788b2c471c31c1d17d449443"
+
+[[package]]
+name = "proc-macro2"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7ed8b8c7b886ea3ed7dde405212185f423ab44682667c8c6dd14aa1d9f6612"
+dependencies = [
+ "unicode-xid",
+]
+
+[[package]]
+name = "procinfo"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ab1427f3d2635891f842892dda177883dca0639e05fe66796a62c9d2f23b49c"
+dependencies = [
+ "byteorder",
+ "libc",
+ "nom",
+ "rustc_version",
+]
+
+[[package]]
+name = "quote"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d0b9745dc2debf507c8422de05d7226cc1f0644216dfdfead988f9b1ab32a7"
+dependencies = [
+ "proc-macro2",
+]
+
+[[package]]
 name = "radium"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "643f8f41a8ebc4c5dc4515c82bb8abd397b527fc20fd681b7c011c2aee5d44fb"
+
+[[package]]
+name = "rustc_version"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
+dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "semver"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
+dependencies = [
+ "semver-parser",
+]
+
+[[package]]
+name = "semver-parser"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
+
+[[package]]
+name = "syn"
+version = "1.0.74"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1873d832550d4588c3dbc20f01361ab00bfe741048f71e3fecf145a7cc18b29c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
+name = "synstructure"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "474aaa926faa1603c40b7885a9eaea29b444d1cb2850cb7c0e37bb1a4182f4fa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "unicode-xid",
+]
 
 [[package]]
 name = "tap"
@@ -123,10 +317,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "tokio"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01cf844b23c6131f624accf65ce0e4e9956a8bb329400ea5bcc26ae3a5c20b0b"
+dependencies = [
+ "autocfg",
+ "num_cpus",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "unicode-xid"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
+
+[[package]]
 name = "wyz"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "129e027ad65ce1453680623c3fb5163cbf7107bfe1aa32257e7d0e63f9ced188"
 dependencies = [
  "tap",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e59ec1d2457bd6c0dd89b50e7d9d6b0b647809bf3f0a59ac85557046950b7b2"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0af017aca1fa6181f5dd7a802456fe6f7666ecdcc18d0910431f0fc89d474e51"
+dependencies = [
+ "proc-macro2",
+ "syn",
+ "synstructure",
 ]

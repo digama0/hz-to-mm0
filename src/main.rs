@@ -9,12 +9,13 @@ mod hol {
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Notify;
-use tokio::sync::watch::{self, Receiver, Sender};
-use std::time::Instant;
+use std::io::{Read, BufRead};
+use std::time::{Duration, Instant};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::io::Read;
+use tokio::runtime::Runtime;
+use tokio::sync::Notify;
+use tokio::sync::watch::{self, Receiver, Sender};
 use hol::parser::Summary;
 use hol::types::{FetchKind, ObjectSpec};
 use hol::kernel::Environment;
@@ -84,66 +85,62 @@ impl Importer {
       self.flush.notified().await;
     }
   }
-}
 
-fn main() {
-  let rpath = PathBuf::from("../flyspeck");
-  let modules = [
-    "BaseSystem",
-    "Multivariate",
-    "Start",
-    "TrigNonlinear",
-    "Volume",
-    "Hypermap",
-    "Fan",
-    "Packing",
-    "Local1",
-    "Tame1",
-    "Local2",
-    "Local3",
-    "Local4",
-    "Local5",
-    "Tame2",
-    "Tame3",
-    "End"
-  ];
-
-  let rt = &tokio::runtime::Runtime::new().unwrap();
-  let boot = Instant::now();
-  let importer = Arc::new(Importer {
-    env: Environment::new(),
-    jobs: Default::default(),
-    flush: Default::default(),
-  });
-  for module in modules {
+  fn import_module(self: Arc<Self>, rt: &Runtime, rpath: &Path, module: &str) {
     println!("importing {}", module);
-    let start = Instant::now();
     let mpath = rpath.join(module);
     let summary = mpath.join("SUMMARY");
     let summary = Summary::from(File::open(summary).unwrap().bytes().map(Result::unwrap));
     assert_eq!(summary.hol_system, "HOL Light");
-    let importer = importer.clone();
     rt.block_on(async move {
-      for (kind, path) in summary.dep_iterator(&importer.env, &mpath) {
+      for (kind, path) in summary.dep_iterator(&self.env, &mpath) {
         let mut sync = kind.sync();
         let (tx, rx) = watch::channel(());
-        match &mut *importer.jobs.write().unwrap() {
+        match &mut *self.jobs.write().unwrap() {
           j => {
             j.insert(kind.clone(), rx);
             if j.len() > 16 { sync = true }
           }
         }
-        let fut = importer.clone().import(kind, path, tx);
+        let fut = self.clone().import(kind, path, tx);
         if sync { fut.await } else { rt.spawn(fut); }
       }
-      importer.flush().await
+      self.flush().await
     });
-    println!("finished {} in {:.2}s, total {:.2}s", module,
-      start.elapsed().as_secs_f32(), boot.elapsed().as_secs_f32());
   }
-  let env = importer.env.read();
-  println!("success");
-  let thm = "kepler_conjecture_with_assumptions";
-  let td = &env[*env.trans.fetches[FetchKind::Thm].get(thm).expect("theorem not found")];
-  env.print_always(&td.arena, |p| println!("{}:\n{}", thm, p.pp(td.concl)));
+}
+
+fn main() {
+  let mut rpath = PathBuf::from(".");
+  let rt = &Runtime::new().unwrap();
+  let importer = Arc::new(Importer {
+    env: Environment::new(),
+    jobs: Default::default(),
+    flush: Default::default(),
+  });
+  let mut total = Duration::ZERO;
+  for line in std::io::stdin().lock().lines() {
+    let line = line.unwrap();
+    let (cmd, arg) = match line.split_once(" ") {
+      Some((cmd, arg)) => (cmd, arg),
+      None => (&*line, "")
+    };
+    match cmd {
+      "set-cwd" => rpath = PathBuf::from(arg),
+      "import" => {
+        let start = Instant::now();
+        importer.clone().import_module(rt, &rpath, arg);
+        let dur = start.elapsed();
+        total += dur;
+        println!("finished {} in {:.2}s, total {:.2}s", arg,
+          dur.as_secs_f32(), total.as_secs_f32());
+      }
+      "print-thm" => {
+        let env = importer.env.read();
+        let td = &env[*env.trans.fetches[FetchKind::Thm].get(arg).expect("theorem not found")];
+        env.print_always(&td.arena, |p| println!("{}:\n{}", arg, p.pp(td.concl)));
+      }
+      _ => panic!("unexpected command {}", cmd),
+    }
+  }
 }
