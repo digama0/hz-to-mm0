@@ -1,3 +1,5 @@
+#![recursion_limit="256"]
+
 mod hol {
   pub mod lexer;
   pub mod parser;
@@ -5,7 +7,11 @@ mod hol {
   pub mod corethy;
   pub mod types;
   pub mod print;
+
+  pub use {types::*, kernel::*};
 }
+
+mod mm0;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -13,6 +19,7 @@ use std::io::{Read, BufRead};
 use std::time::{Duration, Instant};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use mm0::writer::Mm0Writer;
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
 use tokio::sync::watch::{self, Receiver, Sender};
@@ -21,6 +28,7 @@ use hol::types::{FetchKind, ObjectSpec};
 use hol::kernel::Environment;
 
 struct Importer {
+  rpath: PathBuf,
   env: Environment,
   jobs: RwLock<HashMap<ObjectSpec, Receiver<()>>>,
   flush: Notify,
@@ -86,9 +94,9 @@ impl Importer {
     }
   }
 
-  fn import_module(self: Arc<Self>, rt: &Runtime, rpath: &Path, module: &str) {
+  fn import_module(self: Arc<Self>, rt: &Runtime, module: &str) {
     println!("importing {}", module);
-    let mpath = rpath.join(module);
+    let mpath = self.rpath.join(module);
     let summary = mpath.join("SUMMARY");
     let summary = Summary::from(File::open(summary).unwrap().bytes().map(Result::unwrap));
     assert_eq!(summary.hol_system, "HOL Light");
@@ -110,13 +118,47 @@ impl Importer {
   }
 }
 
+struct Builder {
+  rpath: PathBuf,
+  mm0: Option<Mm0Writer>,
+}
+
+enum ImporterBuilder {
+  Building(Builder),
+  Done(Arc<Importer>),
+}
+
+impl ImporterBuilder {
+  fn build(&mut self) -> &mut Builder {
+    if let ImporterBuilder::Building(b) = self { b } else { panic!("already started") }
+  }
+
+  fn importer(&mut self) -> &mut Arc<Importer> {
+    match self {
+      ImporterBuilder::Done(i) => i,
+      ImporterBuilder::Building(Builder { rpath, mm0 }) => {
+        let mut env = Environment::new(mm0);
+        env.init();
+        *self = ImporterBuilder::Done(Arc::new(Importer {
+          rpath: std::mem::take(rpath),
+          env,
+          jobs: Default::default(),
+          flush: Default::default(),
+        }));
+        match self {
+          ImporterBuilder::Done(i) => i,
+          _ => unreachable!()
+        }
+      }
+    }
+  }
+}
+
 fn main() {
-  let mut rpath = PathBuf::from(".");
   let rt = &Runtime::new().unwrap();
-  let importer = Arc::new(Importer {
-    env: Environment::new(),
-    jobs: Default::default(),
-    flush: Default::default(),
+  let mut importer = ImporterBuilder::Building(Builder {
+    rpath: PathBuf::from("."),
+    mm0: None,
   });
   let mut total = Duration::ZERO;
   for line in std::io::stdin().lock().lines() {
@@ -126,17 +168,25 @@ fn main() {
       None => (&*line, "")
     };
     match cmd {
-      "set-cwd" => rpath = PathBuf::from(arg),
+      "#" => {}
+      "set-cwd" => importer.build().rpath = PathBuf::from(arg),
+      "init-mm0" => {
+        let b = importer.build();
+        assert!(b.mm0.replace(mm0::import::hol_writer(
+          b.rpath.join(arg),
+          b.rpath.join(format!("{}.temp", arg)),
+        ).unwrap()).is_none(), "already initialized")
+      }
       "import" => {
         let start = Instant::now();
-        importer.clone().import_module(rt, &rpath, arg);
+        importer.importer().clone().import_module(rt, arg);
         let dur = start.elapsed();
         total += dur;
         println!("finished {} in {:.2}s, total {:.2}s", arg,
           dur.as_secs_f32(), total.as_secs_f32());
       }
       "print-thm" => {
-        let env = importer.env.read();
+        let env = importer.importer().env.read();
         let td = &env[*env.trans.fetches[FetchKind::Thm].get(arg).expect("theorem not found")];
         env.print_always(&td.arena, |p| println!("{}:\n{}", arg, p.pp(td.concl)));
       }

@@ -1,4 +1,5 @@
 set-cwd ../flyspeck_commonhol
+# init-mm0
 import BaseSystem
 import Multivariate
 import Start

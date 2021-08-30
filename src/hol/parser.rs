@@ -1,12 +1,12 @@
 #![allow(clippy::eval_order_dependence)]
 
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::Importer;
+use crate::{Importer, mm0};
 use super::lexer::{Token, PackedToken, Lexer};
 use super::kernel::{Environment, HasTermStore, HasTypeStore, OwnedTerm, OwnedType, ProofArena,
   SubsInst, TermArena, TypeArena, get_print};
@@ -972,7 +972,7 @@ impl Environment {
     })
   }
 
-  pub fn parse_thm_def(&mut self, src: ExternId,
+  pub fn parse_thm_def(&mut self, src: mm0::ThmId,
     tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
   ) -> ThmDef {
     ThmDef::with(self, |a| {
@@ -982,57 +982,6 @@ impl Environment {
       let concl = a.parse_term_str(&tys, &tms, concl);
       a.extern_axiom(hyps, concl, src)
     })
-  }
-
-  pub fn parse_const(&mut self, x: &str, tys: &[&str], ty: &str) -> ConstId {
-    let ty = self.parse_owned_type(tys, ty);
-    self.add_const(x, ty)
-  }
-
-  pub fn parse_basic_def(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str
-  ) -> (ConstId, ThmId) {
-    let tm = self.parse_owned_term(tys, tms, tm);
-    self.add_basic_def(x, tm)
-  }
-
-  pub fn parse_def(&mut self, x: &str, arity: u32, tys: &[&str], tms: &[&str], tm: &str
-  ) -> (ConstId, ThmId) {
-    let tm = self.parse_owned_term(tys, tms, tm);
-    self.add_simple_def(x, arity, tm)
-  }
-
-  pub fn parse_basic_typedef2(&mut self, x: &str, ext: &str, tys: &[&str], tms: &[&str], tm: &str
-  ) -> TyopId {
-    let ext = self.read().extern_by_name(ext);
-    let td = self.parse_thm_def(ext, tys, tms, &[], tm);
-    self.add_basic_typedef(x, td)
-  }
-
-  pub fn parse_basic_typedef(&mut self, x: &str, tys: &[&str], tms: &[&str], tm: &str) -> TyopId {
-    self.parse_basic_typedef2(x, x, tys, tms, tm)
-  }
-
-  pub fn parse_thm2(&mut self, k: FetchKind, x: &str, ext: &str,
-    tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
-  ) -> ThmId {
-    let ext = self.read().extern_by_name(ext);
-    let th = self.parse_thm_def(ext, tys, tms, hyps, concl);
-    self.add_thm(k, x, th)
-  }
-
-  pub fn parse_thm(&mut self, k: FetchKind, x: &str,
-    tys: &[&str], tms: &[&str], hyps: &[&str], concl: &str
-  ) -> ThmId {
-    self.parse_thm2(k, x, x, tys, tms, hyps, concl)
-  }
-
-  pub fn parse_spec<const N: usize>(&mut self, ext: &str,
-    xs: &[&str; N], tys: &[&str], tms: &[&str], tm: &str
-  ) -> ([ConstId; N], ThmId) {
-    let ext = self.read().extern_by_name(ext);
-    let th = self.parse_thm_def(ext, tys, tms, &[], tm);
-    let (cs, th) = self.add_spec(xs, th);
-    (cs.try_into().unwrap(), th)
   }
 }
 
@@ -1101,14 +1050,14 @@ impl Importer {
     match kind {
       ObjectSpec::TypeDecl(x) => {
         let arity = parse_int_section(&mut tk, &mut lexer);
-        self.env.add_tyop(x, arity, None);
+        self.env.add_tyop(x, None, arity, None);
       }
       ObjectSpec::ConstDecl(x) => {
         let ty = OwnedType::with(&self.env, |a| {
           let tys = a.parse_type_preamble(&mut tk, &mut lexer);
           parse_type_section(&mut tk, &mut lexer, &tys)
         });
-        self.env.add_const(x, ty);
+        self.env.add_const(x, None, ConstReason::Axiom, ty);
       }
       ObjectSpec::Axiom(x) => {
         let tm = OwnedTerm::with(&self.env, |a| {
@@ -1116,7 +1065,7 @@ impl Importer {
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
         });
-        self.env.add_axiom(x, tm);
+        self.env.add_axiom(x, None, tm);
       }
       ObjectSpec::BasicDef(x) => {
         let tm = OwnedTerm::with(&self.env, |a| {
@@ -1124,7 +1073,7 @@ impl Importer {
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
         });
-        self.env.add_basic_def(x, tm);
+        self.env.add_basic_def(x, None, tm);
       }
       ObjectSpec::Def(x) => {
         let tm = OwnedTerm::with(&self.env, |a| {
@@ -1132,7 +1081,7 @@ impl Importer {
           let tms = a.parse_term_preamble(&mut tk, &mut lexer, &tys);
           parse_term_section(&mut tk, &mut lexer, &tms)
         });
-        self.env.add_def(x, tm);
+        self.env.add_def(x, None, tm);
       }
       ObjectSpec::Spec(xs) => {
         let pr = ThmDef::with(&self.env, |a| {
@@ -1140,7 +1089,7 @@ impl Importer {
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_spec(&xs, pr);
+        self.env.add_spec(&xs, &[], None, pr);
       }
       ObjectSpec::BasicTypedef(x) => {
         let pr = ThmDef::with(&self.env, |a| {
@@ -1148,13 +1097,13 @@ impl Importer {
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_basic_typedef(x, pr);
+        self.env.add_basic_typedef(x, None, pr);
       }
       ObjectSpec::Typedef(_) => unimplemented!(),
       ObjectSpec::TypeBij(xs) => {
         let [x, x1, x2] = *xs;
         let c = self.env.read().trans.tyops[&x];
-        self.env.add_type_bijs(c, &x, x1, x2);
+        self.env.add_type_bijs(c, &x, x1, x2, None);
       }
       ObjectSpec::Thm(x) => {
         // println!("thm {}", x);
@@ -1165,7 +1114,7 @@ impl Importer {
           let pr = a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs);
           a.alpha_link0(pr, parse_alphalink_section(&mut tk, &mut lexer, &p.1))
         });
-        self.env.add_thm(FetchKind::Thm, x, pr);
+        self.env.add_thm(FetchKind::Thm, x, None, pr);
       }
       ObjectSpec::OpenThm(x) => {
         let pr = ThmDef::with(&self.env, |a| {
@@ -1173,7 +1122,7 @@ impl Importer {
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_thm(FetchKind::OThm, x, pr);
+        self.env.add_thm(FetchKind::OThm, x, None, pr);
       }
       ObjectSpec::NumThm(x) => {
         let pr = ThmDef::with(&self.env, |a| {
@@ -1181,7 +1130,7 @@ impl Importer {
           let subproofs = a.parse_subproofs_section(&mut tk, &mut lexer, &p);
           a.parse_proof_section(&mut tk, &mut lexer, &p, &subproofs)
         });
-        self.env.add_thm(FetchKind::NThm, x.to_string(), pr);
+        self.env.add_thm(FetchKind::NThm, x.to_string(), None, pr);
       }
     };
     assert!(matches!(tk, None));

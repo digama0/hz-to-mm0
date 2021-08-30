@@ -56,6 +56,7 @@ dependencies = [
  "mm0b_parser",
  "num",
  "tokio",
+ "zerocopy",
 ]
 
 [[package]]
@@ -98,9 +99,9 @@ dependencies = [
 
 [[package]]
 name = "mm0_util"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0656febda2b873c44007c5fa112b558d21fb631b29945d9dd7a75fd420fa692a"
+checksum = "22cee3d13265fcdecc6fb1dd05d6a0e516e7f3bdc223b57d21109686aca19190"
 dependencies = [
  "bitflags",
  "lazy_static",
@@ -113,9 +114,9 @@ dependencies = [
 
 [[package]]
 name = "mm0b_parser"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4179809b89e582e27d0da81e2ed6c48a94da2c35794035fd73cd87688431680d"
+checksum = "3bfc51980f93d045944e40d8f18d44ecb034195ecfb7c80065f160efb530766b"
 dependencies = [
  "byteorder",
  "memchr",

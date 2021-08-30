@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::{Index, IndexMut};
-
+use crate::mm0;
 use super::kernel::{OwnedType, TermStore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -79,11 +79,12 @@ pub trait Idx: Copy {
   fn into_usize(self) -> usize { self.into_u32() as usize }
 }
 
+#[macro_export]
 macro_rules! idx {($($ty:ident),*) => {
   $(
     #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
     pub struct $ty(pub u32);
-    impl Idx for $ty {
+    impl crate::hol::Idx for $ty {
       fn from(n: u32) -> Self { Self(n) }
       fn into_u32(self) -> u32 { self.0 }
     }
@@ -94,7 +95,7 @@ macro_rules! idx {($($ty:ident),*) => {
 }}
 
 idx! {
-  TyopId, ConstId, SpecId, ExternId, ThmId, TyVarId,
+  TyopId, ConstId, SpecId, ThmId, TyVarId,
   TypeId, VarId, TermId, HypsId, ProofId
 }
 
@@ -157,17 +158,26 @@ pub enum Term {
   Lam(VarId, TermId),
 }
 
+pub enum ConstReason<'a> {
+  Axiom,
+  Abs(mm0::TydefId),
+  Rep(mm0::TydefId),
+  Def(&'a super::OwnedTerm),
+}
+
 #[derive(Debug)]
 pub struct TyopDef {
   pub name: String,
   pub arity: u32,
-  pub tydef: Option<ThmId>,
+  pub mm0: mm0::TermId,
+  pub tydef: Option<(ThmId, mm0::TydefId)>,
 }
 
 #[derive(Debug)]
 pub struct ConstDef {
   pub name: String,
   pub ty: OwnedType,
+  pub mm0: (mm0::TermId, mm0::ThmId),
 }
 
 #[derive(Debug)]
@@ -176,6 +186,13 @@ pub struct ThmDef {
   pub tyvars: Box<[TyVarId]>,
   pub hyps: Box<[TermId]>,
   pub concl: TermId,
+  pub mm0: mm0::ThmId,
+}
+
+impl ThmDef {
+  pub fn new(arena: TermStore, tyvars: Box<[TyVarId]>, hyps: Box<[TermId]>, concl: TermId) -> Self {
+    Self { arena, tyvars, hyps, concl, mm0: Default::default() }
+  }
 }
 
 #[derive(Debug)]

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use bitvec::{bitbox, prelude::BitBox};
 use num::{BigUint, Zero, CheckedSub};
-
+use crate::mm0;
 use super::print::EnvPrint;
 use super::print::Print;
 use super::types::*;
@@ -1237,7 +1237,7 @@ pub enum ProofTrace {
   NewSimpleDef(ConstId),
   NewDef(ConstId),
   NewSpec(SpecId),
-  Extern(ExternId),
+  Extern(mm0::ThmId),
 }
 
 #[derive(Default, Debug, Hash, PartialEq, Eq)]
@@ -1459,7 +1459,7 @@ impl<'a> ProofArena<'a> {
     self.print_with_env(Some(env), t)
   }
 
-  pub fn extern_axiom(&mut self, hyps: Vec<TermId>, concl: TermId, src: ExternId) -> ProofId {
+  pub fn extern_axiom(&mut self, hyps: Vec<TermId>, concl: TermId, src: mm0::ThmId) -> ProofId {
     let hyps = self.hyps_from_vec(hyps);
     self.add(hyps, concl, ProofTrace::Extern(src))
   }
@@ -2135,9 +2135,7 @@ impl ThmDef {
     let mut c = CollectTyVarsTerm::new(&a);
     c.collect(&a, concl);
     for &h in &*hyps { c.collect(&a, h) }
-    let arena = a.into_store();
-    let tyvars = c.c.get();
-    (ThmDef { arena, tyvars, hyps, concl }, r)
+    (ThmDef::new(a.into_store(), c.c.get(), hyps, concl), r)
   }
 
   pub fn with<'a>(env: &'a Environment, f: impl FnOnce(&mut ProofArena<'a>) -> ProofId) -> ThmDef {
@@ -2160,7 +2158,7 @@ impl ThmDef {
 //   TypeBij([String; 3]),
 // }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EnvironmentInner {
   tyvars: Dedup<TyVar>,
   pub tyops: Vec<TyopDef>,
@@ -2168,6 +2166,7 @@ pub struct EnvironmentInner {
   pub specs: Arc<Mutex<Vec<SpecDef>>>,
   pub thms: Vec<Arc<ThmDef>>,
   pub trans: TransTable,
+  pub mm0: Option<mm0::Mm0Env>,
 }
 
 impl Index<TyVarId> for EnvironmentInner {
@@ -2188,31 +2187,54 @@ impl Index<ThmId> for EnvironmentInner {
 }
 
 impl EnvironmentInner {
-  pub fn mk_tyvar(&mut self, x: Arc<TyVar>) -> TyVarId { self.tyvars.add_inner(x, ()).0 }
-
-  pub fn extern_by_name<'a>(&self, _x: &str) -> ExternId {
-    ExternId(0)
+  pub fn new(mm0: &mut Option<mm0::Mm0Writer>) -> Self {
+    Self {
+      tyvars: Default::default(),
+      tyops: Default::default(),
+      consts: Default::default(),
+      specs: Default::default(),
+      thms: Default::default(),
+      trans: Default::default(),
+      mm0: mm0.take().map(mm0::Mm0Env::new),
+    }
   }
 
-  pub fn add_tyop<'a>(&mut self, td: TyopDef) -> TyopId {
+  pub fn mk_tyvar(&mut self, x: Arc<TyVar>) -> TyVarId { self.tyvars.add_inner(x, ()).0 }
+
+  pub fn add_tyop<'a>(&mut self, orig: Option<mm0::TermId>, mut td: TyopDef) -> TyopId {
     let name = td.name.clone();
     let n = Idx::from(self.tyops.len() as u32);
+    if let Some(mm0) = &mut self.mm0 {
+      let (mm0t, mm0td) = mm0.add_tyop(&name, n, &td, orig);
+      td.mm0 = mm0t;
+      if let Some((_, r)) = &mut td.tydef { *r = mm0td }
+    }
     self.tyops.push(td);
     assert!(self.trans.tyops.insert(name, n).is_none());
     n
   }
 
-  pub fn add_const<'a>(&mut self, cd: ConstDef) -> ConstId {
-    let name = cd.name.clone();
-    // println!("adding constant {}", name);
+  pub fn add_const<'a>(&mut self, name: String,
+    orig: Option<(mm0::TermId, mm0::ThmId)>,
+    reason: ConstReason<'_>,
+    ty: OwnedType,
+  ) -> ConstId {
     let n = Idx::from(self.consts.len() as u32);
-    self.consts.push(cd);
+    let mm0 = if let Some(mm0) = &mut self.mm0 {
+      mm0.add_const(&name, n, &ty, orig, reason)
+    } else { Default::default() };
+    self.consts.push(ConstDef { name: name.clone(), ty, mm0 });
     assert!(self.trans.consts.insert(name, n).is_none());
     n
   }
 
-  pub fn add_anon_thm<'a>(&mut self, d: ThmDef) -> ThmId {
+  pub fn add_anon_thm<'a>(&mut self, name: Option<&str>,
+    orig: Option<mm0::ThmId>, mut d: ThmDef,
+  ) -> ThmId {
     let n = Idx::from(self.thms.len() as u32);
+    if let Some(mm0) = &mut self.mm0 {
+      d.mm0 = mm0.add_thm(name, n, &d, orig)
+    }
     self.thms.push(Arc::new(d));
     n
   }
@@ -2224,14 +2246,16 @@ impl EnvironmentInner {
     }
   }
 
-  pub fn add_thm<'a>(&mut self, k: FetchKind, name: String, d: ThmDef) -> ThmId {
-    let n = self.add_anon_thm(d);
+  pub fn add_thm<'a>(&mut self, k: FetchKind, name: String,
+    orig: Option<mm0::ThmId>, d: ThmDef
+  ) -> ThmId {
+    let n = self.add_anon_thm(Some(&name), orig, d);
     self.add_thm_alias(k, name, n);
     n
   }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Environment(RwLock<EnvironmentInner>);
 
 pub struct EnvRef<'a>(RwLockReadGuard<'a, EnvironmentInner>);
@@ -2260,12 +2284,13 @@ impl EnvRef<'_> {
 }
 
 impl Environment {
+  pub fn new(mm0: &mut Option<mm0::Mm0Writer>) -> Self {
+    Self(RwLock::new(EnvironmentInner::new(mm0)))
+  }
+
   pub fn read(&self) -> EnvRef<'_> { EnvRef(self.0.read().unwrap()) }
   pub fn write(&self) -> EnvRefMut<'_> { EnvRefMut(self.0.write().unwrap()) }
   pub fn mk_tyvar(&self, x: Arc<TyVar>) -> TyVarId { self.write().mk_tyvar(x) }
-
-  #[allow(unused)]
-  pub fn extern_by_name<'a>(&self, x: &str) -> ExternId { self.read().extern_by_name(x) }
 
   pub fn print<S: ?Sized>(&self, arena: &S, f: impl FnOnce(EnvPrint<'_, S>)) {
     self.read().print(arena, f)
@@ -2276,31 +2301,49 @@ impl Environment {
   }
 
   pub fn add_tyop<'a>(&self,
-    name: impl Into<Cow<'a, str>>, arity: u32, tydef: Option<ThmId>
+    name: impl Into<Cow<'a, str>>,
+    orig: Option<mm0::TermId>,
+    arity: u32, tydef: Option<(ThmId, mm0::TydefId)>
   ) -> TyopId {
-    self.write().add_tyop(TyopDef {name: name.into().into_owned(), arity, tydef})
+    self.write().add_tyop(orig, TyopDef {
+      name: name.into().into_owned(),
+      arity,
+      mm0: Default::default(),
+      tydef
+    })
   }
 
-  pub fn add_const<'a>(&self, name: impl Into<Cow<'a, str>>, ty: OwnedType) -> ConstId {
-    self.write().add_const(ConstDef {name: name.into().into_owned(), ty})
+  pub fn add_const<'a>(&self, name: impl Into<Cow<'a, str>>,
+    orig: Option<(mm0::TermId, mm0::ThmId)>,
+    reason: ConstReason<'_>,
+    ty: OwnedType,
+  ) -> ConstId {
+    self.write().add_const(name.into().into_owned(), orig, reason, ty)
   }
 
-  pub fn add_anon_thm<'a>(&self, d: ThmDef) -> ThmId { self.write().add_anon_thm(d) }
+  pub fn add_anon_thm<'a>(&self, name: Option<&str>,
+    orig: Option<mm0::ThmId>, d: ThmDef
+  ) -> ThmId {
+    self.write().add_anon_thm(name, orig, d)
+  }
 
   pub fn add_thm_alias<'a>(&self, k: FetchKind, name: impl Into<Cow<'a, str>>, th: ThmId) {
     self.write().add_thm_alias(k, name.into().into_owned(), th)
   }
 
-  pub fn add_thm<'a>(&self, k: FetchKind, name: impl Into<Cow<'a, str>>, d: ThmDef) -> ThmId {
-    self.write().add_thm(k, name.into().into_owned(), d)
+  pub fn add_thm<'a>(&self, k: FetchKind, name: impl Into<Cow<'a, str>>,
+    orig: Option<mm0::ThmId>, d: ThmDef
+  ) -> ThmId {
+    self.write().add_thm(k, name.into().into_owned(), orig, d)
   }
 
   pub fn add_type_bijs<'a>(&self, c: TyopId, cname: &str,
-    abs: impl Into<Cow<'a, str>>, rep: impl Into<Cow<'a, str>>
+    abs: impl Into<Cow<'a, str>>, rep: impl Into<Cow<'a, str>>,
+    orig: Option<([(mm0::TermId, mm0::ThmId); 2], [mm0::ThmId; 2])>,
   ) -> (ConstId, ConstId, ThmId, ThmId) {
     let abs = abs.into(); let rep = rep.into();
     let env = self.read();
-    let exists_p = *env[c].tydef
+    let (exists_p, mm0td) = *env[c].tydef
       .as_ref().expect("add_type_bijs: not a type operator");
     let ThmDef {arena: ref store, concl, ..} = *env[exists_p].clone();
     drop(env);
@@ -2317,7 +2360,8 @@ impl Environment {
       let cty = a.mk_tyop(c, args);
       ty!(a, aty -> cty)
     });
-    let absc = self.add_const(&*abs, absc);
+    let absc = self.add_const(&*abs, orig.as_ref().map(|p| p.0[0]),
+      ConstReason::Abs(mm0td), absc);
     let repc = OwnedType::with(self, |a| {
       // rep[v0..vn]: C[v0..vn] -> A
       let aty = a.import(&store.tys, |mut tr| tr.tr(ty));
@@ -2325,7 +2369,8 @@ impl Environment {
       let cty = a.mk_tyop(c, args);
       ty!(a, cty -> aty)
     });
-    let repc = self.add_const(&*rep, repc);
+    let repc = self.add_const(&*rep, orig.as_ref().map(|p| p.0[1]),
+      ConstReason::Rep(mm0td), repc);
     let abs_rep = ThmDef::with(self, |a| {
       let t = &mut a.tms;
       let abs = t.mk_const_natural(absc);
@@ -2335,7 +2380,7 @@ impl Environment {
       let concl = term!(t, !v. (A abs (A rep va)) = va);
       a.add0(concl, ProofTrace::NewTypeBij1(c))
     });
-    let abs_rep = self.add_thm(FetchKind::TypeBij1, cname, abs_rep);
+    let abs_rep = self.add_thm(FetchKind::TypeBij1, cname, orig.as_ref().map(|p| p.1[0]), abs_rep);
     let rep_abs = ThmDef::with(self, |a| {
       let t = &mut a.tms;
       let abs = t.mk_const_natural(absc);
@@ -2346,29 +2391,35 @@ impl Environment {
       let concl = term!(t, !v. (A p vr) = ((A rep (A abs vr)) = vr));
       a.add0(concl, ProofTrace::NewTypeBij2(c))
     });
-    let rep_abs = self.add_thm(FetchKind::TypeBij2, cname, rep_abs);
+    let rep_abs = self.add_thm(FetchKind::TypeBij2, cname, orig.as_ref().map(|p| p.1[1]), rep_abs);
     (absc, repc, abs_rep, rep_abs)
   }
 
-  pub fn add_basic_def<'a>(&self, x: impl Into<Cow<'a, str>>, tm: OwnedTerm
+  pub fn add_basic_def<'a>(&self, x: impl Into<Cow<'a, str>>,
+    orig: Option<((mm0::TermId, mm0::ThmId), mm0::ThmId)>,
+    tm: OwnedTerm
   ) -> (ConstId, ThmId) {
     let x = x.into();
     let ty = OwnedType::with(self, |a| {
       a.import(&tm.arena, |mut tr| tr.tr(tm.arena.type_of(tm.term)))
     });
-    let c = self.add_const(&*x, ty);
+    let c = self.add_const(&*x, orig.as_ref().map(|p| p.0),
+      ConstReason::Def(&tm), ty);
     let th = ThmDef::with(self, |a| {
       let rhs = a.tms.import(&tm.arena, |mut tr| tr.tr_term(tm.term));
       let lhs = a.mk_const_natural(c);
       thm!(a, add0(NewBasicDef(c), lhs = rhs))
     });
-    (c, self.add_thm(FetchKind::BasicDef, x, th))
+    (c, self.add_thm(FetchKind::BasicDef, x, orig.as_ref().map(|p| p.1), th))
   }
 
-  pub fn add_simple_def<'a>(&self, x: impl Into<Cow<'a, str>>, arity: u32, tm: OwnedTerm
+  pub fn add_simple_def<'a>(&self, x: impl Into<Cow<'a, str>>,
+    arity: u32,
+    orig: Option<(((mm0::TermId, mm0::ThmId), mm0::ThmId), mm0::ThmId)>,
+    tm: OwnedTerm,
   ) -> (ConstId, ThmId) {
     let x = x.into();
-    let (c, th) = self.add_basic_def(&*x, tm);
+    let (c, th) = self.add_basic_def(&*x, orig.as_ref().map(|p| p.0), tm);
     if arity == 0 {
       self.add_thm_alias(FetchKind::Def, x, th);
       (c, th)
@@ -2394,12 +2445,14 @@ impl Environment {
         });
         a.add0(concl, ProofTrace::NewSimpleDef(c))
       });
-      (c, self.add_thm(FetchKind::Def, x, th))
+      (c, self.add_thm(FetchKind::Def, x, orig.as_ref().map(|p| p.1), th))
     }
   }
 
   pub fn add_def<'a>(&self, x: impl Into<Cow<'a, str>>,
-    OwnedTerm {arena: old, term, ..}: OwnedTerm) -> (ConstId, ThmId) {
+    orig: Option<(((mm0::TermId, mm0::ThmId), mm0::ThmId), mm0::ThmId)>,
+    OwnedTerm {arena: old, term, ..}: OwnedTerm,
+  ) -> (ConstId, ThmId) {
     fn untuple(e: TermId, old: &TermStore, gv: TermId,
       tr: &mut TermImporter<'_, '_, '_, TermStore>,
       visit: &mut impl FnMut(VarId, VarId, TermId, &mut TermArena<'_>),
@@ -2434,7 +2487,7 @@ impl Environment {
       for gv in gvs.into_iter().rev() { lam = tr.dest().mk_lam(gv, lam) }
       lam
     }));
-    let (c, th) = self.add_basic_def(&*x, tm);
+    let (c, th) = self.add_basic_def(&*x, orig.as_ref().map(|p| p.0), tm);
     if vs2.is_empty() && args.is_empty() {
       self.add_thm_alias(FetchKind::Def, x, th);
       (c, th)
@@ -2452,22 +2505,30 @@ impl Environment {
         });
         a.add0(concl, ProofTrace::NewDef(c))
       });
-      (c, self.add_thm(FetchKind::Def, x, th))
+      (c, self.add_thm(FetchKind::Def, x, orig.as_ref().map(|p| p.1), th))
     }
   }
 
-  pub fn add_basic_typedef<'a>(&self, x: impl Into<Cow<'a, str>>, th: ThmDef) -> TyopId {
+  pub fn add_basic_typedef<'a>(&self, x: impl Into<Cow<'a, str>>,
+    orig: Option<(mm0::ThmId, mm0::TermId, mm0::TydefId)>,
+    th: ThmDef
+  ) -> TyopId {
     let x = x.into();
     let arity = th.tyvars.len() as u32;
-    let exists_p = self.add_anon_thm(th);
-    self.add_tyop(&*x, arity, Some(exists_p))
+    let exists_p = self.add_anon_thm(Some(&x), orig.as_ref().map(|p| p.0), th);
+    self.add_tyop(&*x, orig.as_ref().map(|p| p.1), arity,
+      Some((exists_p, orig.as_ref().map_or(Default::default(), |p| p.2))))
   }
 
-  pub fn add_spec<'a>(&self, xs: &[impl Borrow<str>], td: ThmDef) -> (Vec<ConstId>, ThmId) {
+  pub fn add_spec<'a>(&self, xs: &[impl Borrow<str>],
+    orig: &[((mm0::TermId, mm0::ThmId), mm0::ThmId)],
+    orig_spec: Option<mm0::ThmId>,
+    td: ThmDef,
+  ) -> (Vec<ConstId>, ThmId) {
     assert!(td.hyps.is_empty());
     let mut term = td.concl;
     let mut subst: Vec<(VarId, ConstId)> = vec![];
-    for x in xs {
+    for (i, x) in xs.iter().enumerate() {
       let x = x.borrow();
       let (v, body) = td.arena.dest_exists(term);
       let tm = OwnedTerm::with(self, |a| {
@@ -2479,7 +2540,7 @@ impl Environment {
         }
         inst.apply(a, t)
       });
-      let (c, th) = self.add_basic_def(&*x, tm);
+      let (c, th) = self.add_basic_def(&*x, orig.get(i).copied(), tm);
       self.add_thm_alias(FetchKind::Def, x, th);
       subst.push((v, c));
       term = body;
@@ -2487,7 +2548,7 @@ impl Environment {
     let specs = self.read().specs.clone();
     let mut specs = specs.lock().unwrap();
     let spec = Idx::from(specs.len() as u32);
-    let n = self.add_anon_thm(ThmDef::with(self, |a| {
+    let n = self.add_anon_thm(None, orig_spec, ThmDef::with(self, |a| {
       let concl = a.tms.import(&td.arena, |mut tr| {
         let t = tr.tr_term(term);
         let mut inst = InstTerm::default();
@@ -2506,8 +2567,9 @@ impl Environment {
     (consts, n)
   }
 
-  pub fn add_axiom(&self, x: String, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
+  pub fn add_axiom(&self, x: String,
+    orig: Option<mm0::ThmId>, OwnedTerm {arena, tyvars, term}: OwnedTerm) -> ThmId {
     assert!(arena.is_boolean(term));
-    self.add_thm(FetchKind::Axiom, x, ThmDef {arena, tyvars, hyps: Box::new([]), concl: term})
+    self.add_thm(FetchKind::Axiom, x, orig, ThmDef::new(arena, tyvars, Box::new([]), term))
   }
 }
