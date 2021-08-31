@@ -9,7 +9,6 @@ use super::Mm0Writer;
 
 macro_rules! const_assert { ($cond:expr) => { let _ = [(); 0 - (!($cond) as usize)]; } }
 macro_rules! build_consts {
-  (@NIL $n:ident) => { () };
   (@CONST sort $name:ident $e:expr) => { pub const $name: SortId = SortId($e); };
   (@CONST term $name:ident $e:expr) => { pub const $name: TermId = TermId($e); };
   (@CONST thm $name:ident $e:expr) => { pub const $name: ThmId = ThmId($e); };
@@ -25,24 +24,15 @@ macro_rules! build_consts {
   (@GET $index:expr, term $s:tt) => { $index.terms.get($s).map(|n| n.0) };
   (@GET $index:expr, thm $s:tt) => { $index.thms.get($s).map(|n| n.0) };
   (@PRINT $print1:ident, $out:expr, $index:expr, $name:expr, tydef $s:tt = $e:expr) => {
-    write!($out, "  tydef {}: {:?} = {};", $name, stringify!($s), $e).unwrap()
+    writeln!($out, "  tydef {}: {} = {};", $name, stringify!($s), $e).unwrap()
   };
   (@PRINT $print1:ident, $out:expr, $index:expr, $name:expr, $ty:ident $s:tt = $e:expr) => {
     $print1(&mut $out, stringify!($ty), $name, $s, build_consts!(@GET $index, $ty $s), $e)
   };
-  (@TYDEFS_CALLBACK $cb:ident $($t:tt)*) => {
-    $cb! { $(build_consts!(@TYDEFS_FILTER $t))* }
-  };
-  (@TYDEFS ($($left:tt)*) (tydef $t:tt) $($right:tt)*) => {
-    build_consts! { @TYDEFS ($($left)* $t) $($right)* }
-  };
-  (@TYDEFS ($($left:tt)*) $t:tt $($right:tt)*) => {
-    build_consts! { @TYDEFS ($($left)*) $($right)* }
-  };
-  (@TYDEFS ($(($name:ident $s:expr, $e:expr))*)) => {
+  (@TYDEFS $(($nil:tt ($name:ident $s:expr, $e:expr)))*) => {
     pub const TYDEFS: [
       (ThmId, TermId, [(TermId, ThmId); 2], [ThmId; 2]);
-      [$(build_consts!(@NIL $name)),*].len()
+      [$($nil),*].len()
     ] = {
       const_assert!({
         let mut n = 0;
@@ -52,13 +42,16 @@ macro_rules! build_consts {
       [$($s),*]
     };
   };
+  (@FILTER_TYDEFS $(($(tydef $($tydef:literal)?)? $(sort)? $(term)? $(thm)?: $t:tt))*) => {
+    build_consts! { @TYDEFS $($($($tydef)? (() $t))?)* }
+  };
   ($($ty:ident $name:ident: $s:tt = $e:expr;)*) => {
     pub mod mm0_const {
       use crate::mm0::{SortId, TermId, ThmId, TydefId};
       $(build_consts!(@CONST $ty $name $e);)*
     }
 
-    build_consts! { @TYDEFS () $(($ty ($name $s, $e)))* }
+    build_consts! { @FILTER_TYDEFS $(($ty: ($name $s, $e)))* }
 
     #[cfg(debug_assertions)]
     fn check_consts(mmb: &MmbFile<'_>) {
@@ -114,6 +107,7 @@ macro_rules! build_consts {
 
 // This is a list of indexes into the hol.mmb file; it is checked during startup,
 // and if any of the indexes are wrong then it will print the appropriate replacement.
+// (TODO: use code generation)
 build_consts! {
   sort WFF: "wff" = 0;
   sort TYPE: "type" = 1;
@@ -127,210 +121,266 @@ build_consts! {
 
   term BOOL: "bool" = 2;
   term FUN: "fun" = 3;
-  term EQ: "eq" = 7;  thm EQ_T: "eqT" = 20;
-  term TRUE: "T" = 11;  thm TRUE_T: "TT" = 44;  thm TRUE_DEF: "T_DEF" = 43;
-  term AND: "and" = 16;  thm AND_T: "andT" = 59;  thm AND_DEF: "AND_DEF" = 58;
-  term IMP: "imp" = 18;  thm IMP_T: "impT" = 67;  thm IMP_DEF: "IMP_DEF" = 66;
-  term ALL: "all" = 20;  thm ALL_T: "allT" = 80;  thm ALL_DEF: "FORALL_DEF" = 79;
-  term EX: "ex" = 22;  thm EX_T: "exT" = 89;  thm EX_DEF: "EXISTS_DEF" = 88;
-  term OR: "or" = 24;  thm OR_T: "orT" = 111;  thm OR_DEF: "OR_DEF" = 110;
-  term FALSE: "F" = 26;  thm FALSE_T: "FT" = 119;  thm FALSE_DEF: "F_DEF" = 118;
-  term NOT: "not" = 27;  thm NOT_T: "notT" = 122;  thm NOT_DEF: "NOT_DEF" = 121;
-  term EU: "eu" = 29;  thm EU_T: "euT" = 132;  thm EU_DEF: "EU_DEF" = 131;
-  thm ETA_AX: "ETA_AX" = 62;
-  term SEL: "sel" = 30;  thm SEL_T: "selT" = 62;
-  thm SELECT_AX: "SELECT_AX" = 134;
-  term COND: "COND" = 30;  thm COND_T: "condT" = 137;  thm COND_DEF: "COND_DEF" = 138;
 
-  thm CONJ: "CONJ" = 62;
-  thm CONJ_PAIR: "CONJ_PAIR" = 63;
-  thm CONJUNCT1: "CONJUNCT1" = 64;
-  thm CONJUNCT2: "CONJUNCT2" = 65;
-  thm REFL: "refl" = 26;
-  thm AEQ: "aeq" = 27;
-  thm AEQ1: "aeq1" = 28;
-  thm AEQ2: "aeq2" = 29;
-  thm MP: "MP" = 71;
-  thm DISCH: "DISCH" = 72;
-  thm UNDISCH: "UNDISCH" = 73;
-  thm IMP_ANTISYM: "IMP_ANTISYM" = 74;
-  thm EQ_IMP1: "EQ_IMP1" = 75;
-  thm EQ_IMP2: "EQ_IMP2" = 76;
-  thm IMP_ID: "IMP_ID" = 77;
-  thm IMP_TRANS: "IMP_TRANS" = 78;
-  thm SPEC: "SPEC" = 86;
-  thm GEN: "GEN" = 87;
-  thm CHOOSE: "CHOOSE" = 94;
-  thm EXISTS: "EXISTS" = 96;
-  thm DISJ1: "DISJ1" = 115;
-  thm DISJ2: "DISJ2" = 116;
-  thm DISJ_CASES: "DISJ_CASES" = 117;
-  thm CONTR: "CONTR" = 120;
-  thm NOT_ELIM: "NOT_ELIM" = 126;
-  thm NOT_INTRO: "NOT_INTRO" = 127;
-  thm EQF_INTRO: "EQF_INTRO" = 128;
-  thm EQF_ELIM: "EQF_ELIM" = 129;
-  thm NOT_FALSE: "NOT_FALSE" = 130;
-  thm CCONTR: "CCONTR" = 136;
-  thm PROD_TYBIJ1: "prod_tybij1" = 142;
-  thm PROD_TYBIJ2: "prod_tybij2" = 143;
-  thm ONE_ONE_THM: "ONE_ONE" = 145;
-  thm ONTO_THM: "ONTO" = 147;
-  thm INF: "inf" = 148;
+  term EQ: "eq" = 7;
+  thm EQ_T: "eqT" = 27;
+
+  term TRUE: "T" = 11;
+  thm TRUE_T: "TT" = 51;
+  thm TRUE_DEF: "T_DEF" = 52;
+
+  term AND: "and" = 16;
+  thm AND_T: "andT" = 68;
+  thm AND_DEF: "AND_DEF" = 69;
+
+  term IMP: "imp" = 18;
+  thm IMP_T: "impT" = 76;
+  thm IMP_DEF: "IMP_DEF" = 77;
+
+  term ALL: "all" = 20;
+  thm ALL_T: "allT" = 90;
+  thm ALL_DEF: "FORALL_DEF" = 91;
+
+  term EX: "ex" = 22;
+  thm EX_T: "exT" = 105;
+  thm EX_DEF: "EXISTS_DEF" = 106;
+
+  term OR: "or" = 24;
+  thm OR_T: "orT" = 127;
+  thm OR_DEF: "OR_DEF" = 128;
+
+  term FALSE: "F" = 26;
+  thm FALSE_T: "FT" = 138;
+  thm FALSE_DEF: "F_DEF" = 139;
+
+  term NOT: "not" = 27;
+  thm NOT_T: "notT" = 142;
+  thm NOT_DEF: "NOT_DEF" = 143;
+
+  term EU: "eu" = 29;
+  thm EU_T: "euT" = 153;
+  thm EU_DEF: "EU_DEF" = 154;
+  thm ETA_AX: "ETA_AX" = 104;
+
+  term SEL: "sel" = 15;
+  thm SEL_T: "selT" = 63;
+  thm SELECT_AX: "SELECT_AX" = 157;
+
+  term COND: "COND" = 30;
+  thm COND_T: "condT" = 163;
+  thm COND_DEF: "COND_DEF" = 164;
+
+  thm CONJ: "CONJ" = 72;
+  thm CONJ_PAIR: "CONJ_PAIR" = 73;
+  thm CONJUNCT1: "CONJUNCT1" = 74;
+  thm CONJUNCT2: "CONJUNCT2" = 75;
+  thm REFL: "refl" = 33;
+  thm AEQ: "aeq" = 34;
+  thm AEQ1: "aeq1" = 35;
+  thm AEQ2: "aeq2" = 36;
+  thm MP: "MP" = 81;
+  thm DISCH: "DISCH" = 82;
+  thm UNDISCH: "UNDISCH" = 84;
+  thm IMP_ANTISYM: "IMP_ANTISYM" = 85;
+  thm EQ_IMP1: "EQ_IMP1" = 86;
+  thm EQ_IMP2: "EQ_IMP2" = 87;
+  thm IMP_ID: "IMP_ID" = 88;
+  thm IMP_TRANS: "IMP_TRANS" = 89;
+  thm SPEC: "SPEC" = 97;
+  thm GEN: "GEN" = 98;
+  thm CHOOSE: "CHOOSE" = 111;
+  thm EXISTS: "EXISTS" = 113;
+  thm DISJ1: "DISJ1" = 132;
+  thm DISJ2: "DISJ2" = 134;
+  thm DISJ_CASES: "DISJ_CASES" = 136;
+  thm CONTR: "CONTR" = 140;
+  thm NOT_ELIM: "NOT_ELIM" = 147;
+  thm NOT_INTRO: "NOT_INTRO" = 148;
+  thm EQF_INTRO: "EQF_INTRO" = 149;
+  thm EQF_ELIM: "EQF_ELIM" = 150;
+  thm NOT_FALSE: "NOT_FALSE" = 151;
+  thm CCONTR: "CCONTR" = 162;
+  thm PROD_TYBIJ1: "prod_tybij1" = 172;
+  thm PROD_TYBIJ2: "prod_tybij2" = 173;
+  thm ONE_ONE_THM: "ONE_ONE" = 192;
+  thm ONTO_THM: "ONTO" = 197;
+  thm INF: "inf" = 198;
 
   term MK_PAIR: "mk_pair" = 31;
-    thm MK_PAIR_T: "mk_pairT" = 138;
-    thm MK_PAIR_DEF: "mk_pair_DEF" = 138;
+  thm MK_PAIR_T: "mk_pairT" = 165;
+  thm MK_PAIR_DEF: "mk_pair_DEF" = 166;
 
   term PROD: "prod" = 32;
-    thm PROD_THM: "PROD_THM" = 142;
-    term ABS_PROD: "ABS_prod" = 33;  thm ABS_PROD_T: "ABS_prodT" = 122;
-    term REP_PROD: "REP_prod" = 34;  thm REP_PROD_T: "REP_prodT" = 122;
-    thm PROD_BIJ1: "PROD_BIJ1" = 142;  thm PROD_BIJ2: "PROD_BIJ2" = 142;
+  thm PROD_THM: "PROD_THM" = 168;
+  term ABS_PROD: "ABS_prod" = 33;
+  thm ABS_PROD_T: "ABS_prodT" = 170;
+  term REP_PROD: "REP_prod" = 34;
+  thm REP_PROD_T: "REP_prodT" = 171;
+  thm PROD_BIJ1: "PROD_BIJ1" = 174;
+  thm PROD_BIJ2: "PROD_BIJ2" = 175;
   tydef PROD_TYDEF: (PROD_THM, PROD,
     [(ABS_PROD, ABS_PROD_T), (REP_PROD, REP_PROD_T)], [PROD_BIJ1, PROD_BIJ2]) = 0;
 
-  term PAIR: "pr" = 31;  thm PAIR_T: "prT" = 138;  thm PAIR_DEF: "PAIR_DEF" = 138;
-  term FST: "fst" = 31;  thm FST_T: "fstT" = 138;  thm FST_DEF: "FST_DEF" = 138;
-  term SND: "snd" = 31;  thm SND_T: "sndT" = 138;  thm SND_DEF: "SND_DEF" = 138;
+  term PAIR: "pr" = 35;
+  thm PAIR_T: "prT" = 176;
+  thm PAIR_DEF: "PAIR_DEF" = 177;
 
-  term IND: "ind" = 37;
-  term ONE_ONE: "one_one" = 35;
-    thm ONE_ONE_T: "one_one_T" = 144;
-    thm ONE_ONE_BD: "one_one_BD" = 144;
-    thm ONE_ONE_DEF: "one_one_DEF" = 144;
-  term ONTO: "onto" = 36;
-    thm ONTO_T: "onto_T" = 144;
-    thm ONTO_BD: "onto_BD" = 144;
-    thm ONTO_DEF: "onto_DEF" = 144;
+  term FST: "fst" = 36;
+  thm FST_T: "fstT" = 180;
+  thm FST_DEF: "FST_DEF" = 181;
 
-  thm INFINITY_AX: "inf" = 144;
-  term IND_SUC: "IND_SUC" = 144;
-    thm IND_SUC_T: "IND_SUC_T" = 144;
-    thm IND_SUC_DEF: "IND_SUC_DEF" = 144;
-  term IND_0: "IND_0" = 144;
-    thm IND_0_T: "IND_0_T" = 144;
-    thm IND_0_DEF: "IND_0_DEF" = 144;
-  term NUM_REP: "NUM_REP" = 144;
-    thm NUM_REP_T: "NUM_REP_T" = 144;
-    thm NUM_REP_DEF: "NUM_REP_DEF" = 144;
+  term SND: "snd" = 37;
+  thm SND_T: "sndT" = 184;
+  thm SND_DEF: "SND_DEF" = 185;
 
-  term NUM: "num" = 32;
-    thm NUM_THM: "NUM_THM" = 142;
-    term MK_NUM: "mk_num" = 33;  thm MK_NUM_T: "mk_numT" = 122;
-    term DEST_NUM: "dest_num" = 34;  thm DEST_NUM_T: "dest_numT" = 122;
-    thm NUM_BIJ1: "NUM_BIJ1" = 142;  thm NUM_BIJ2: "NUM_BIJ2" = 142;
+  term IND: "ind" = 40;
+
+  term ONE_ONE: "one_one" = 38;
+  thm ONE_ONE_T: "one_one_T" = 188;
+  thm ONE_ONE_BD: "one_one_BD" = 189;
+  thm ONE_ONE_DEF: "one_one_DEF" = 191;
+
+  term ONTO: "onto" = 39;
+  thm ONTO_T: "onto_T" = 193;
+  thm ONTO_BD: "onto_BD" = 194;
+  thm ONTO_DEF: "onto_DEF" = 196;
+
+  thm INFINITY_AX: "inf" = 198;
+
+  term IND_SUC: "IND_SUC" = 41;
+  thm IND_SUC_T: "IND_SUC_T" = 199;
+  thm IND_SUC_DEF: "IND_SUC_DEF" = 200;
+
+  term IND_0: "IND_0" = 42;
+  thm IND_0_T: "IND_0_T" = 203;
+  thm IND_0_DEF: "IND_0_DEF" = 204;
+
+  term NUM_REP: "NUM_REP" = 43;
+  thm NUM_REP_T: "NUM_REP_T" = 205;
+  thm NUM_REP_DEF: "NUM_REP_DEF" = 206;
+
+  term NUM: "num" = 44;
+  thm NUM_THM: "NUM_THM" = 207;
+  term MK_NUM: "mk_num" = 45;
+  thm MK_NUM_T: "mk_numT" = 208;
+  term DEST_NUM: "dest_num" = 46;
+  thm DEST_NUM_T: "dest_numT" = 209;
+  thm NUM_BIJ1: "NUM_BIJ1" = 212;
+  thm NUM_BIJ2: "NUM_BIJ2" = 213;
   tydef NUM_TYDEF: (NUM_THM, NUM,
     [(MK_NUM, MK_NUM_T), (DEST_NUM, DEST_NUM_T)], [NUM_BIJ1, NUM_BIJ2]) = 1;
 
-  term ZERO: "_0" = 32; thm ZERO_T: "_0T" = 144; thm ZERO_DEF: "_0_DEF" = 144;
+  term ZERO: "_0" = 47;
+  thm ZERO_T: "_0T" = 214;
+  thm ZERO_DEF: "_0_DEF" = 215;
 
-  term SUC: "SUC" = 32;
-    thm SUC_T: "SUC_T" = 144;
-    thm SUC_BD: "SUC_BD" = 144;
-    thm SUC_DEF: "SUC_DEF" = 144;
+  term SUC: "suc" = 48;
+  thm SUC_T: "sucT" = 216;
+  thm SUC_BD: "suc_BD" = 218;
+  thm SUC_DEF: "suc_DEF" = 219;
 
-  term NUMERAL: "NUMERAL" = 32;
-    thm NUMERAL_T: "NUMERAL_T" = 144;
-    thm NUMERAL_BD: "NUMERAL_BD" = 144;
-    thm NUMERAL_DEF: "NUMERAL_DEF" = 144;
+  term NUMERAL: "NUMERAL" = 49;
+  thm NUMERAL_T: "NUMERAL_T" = 220;
+  thm NUMERAL_BD: "NUMERAL_BD" = 222;
+  thm NUMERAL_DEF: "NUMERAL_DEF" = 223;
 
-  term BIT0: "BIT0" = 32;
-    thm BIT0_T: "BIT0T" = 144;
-    thm BIT0_DEF: "BIT0_DEF" = 144;
+  term BIT0: "bit0" = 51;
+  thm BIT0_T: "bit0T" = 230;
+  thm BIT0_DEF: "bit0_DEF" = 232;
 
-  term BIT1: "BIT1" = 32;
-    thm BIT1_T: "BIT1T" = 144;
-    thm BIT1_BD: "BIT1_BD" = 144;
-    thm BIT1_DEF: "BIT1_DEF" = 144;
+  term BIT1: "bit1" = 52;
+  thm BIT1_T: "bit1T" = 233;
+  thm BIT1_BD: "bit1_BD" = 235;
+  thm BIT1_DEF: "bit1_DEF" = 236;
 
-  term PRE: "pre" = 32;
-    thm PRE_T: "preT" = 144;
-    thm PRE_DEF: "PRE_DEF" = 144;
-    thm PRE_SPEC: "PRE" = 144;
+  term PRE: "pre" = 54;
+  thm PRE_T: "preT" = 238;
+  thm PRE_DEF: "pre_DEF" = 239;
+  thm PRE_SPEC: "PRE" = 240;
 
-  term ADD: "add" = 32;
-    thm ADD_T: "addT" = 144;
-    thm ADD_DEF: "ADD_DEF" = 144;
-    thm ADD_SPEC: "ADD" = 144;
+  term ADD: "add" = 55;
+  thm ADD_T: "addT" = 241;
+  thm ADD_DEF: "add_DEF" = 243;
+  thm ADD_SPEC: "ADD" = 244;
 
-  term MUL: "mul" = 32;
-    thm MUL_T: "mulT" = 144;
-    thm MUL_DEF: "MUL_DEF" = 144;
-    thm MUL_SPEC: "MUL" = 144;
+  term MUL: "mul" = 57;
+  thm MUL_T: "mulT" = 245;
+  thm MUL_DEF: "mul_DEF" = 247;
+  thm MUL_SPEC: "MUL" = 248;
 
-  term EXP: "exp" = 32;
-    thm EXP_T: "expT" = 144;
-    thm EXP_DEF: "EXP_DEF" = 144;
-    thm EXP_SPEC: "EXP" = 144;
+  term EXP: "exp" = 59;
+  thm EXP_T: "expT" = 250;
+  thm EXP_DEF: "exp_DEF" = 252;
+  thm EXP_SPEC: "EXP" = 253;
 
-  term LE: "le" = 32;
-    thm LE_T: "leT" = 144;
-    thm LE_DEF: "LE_DEF" = 144;
-    thm LE_SPEC: "LE" = 144;
+  term LE: "le" = 60;
+  thm LE_T: "leT" = 254;
+  thm LE_DEF: "le_DEF" = 256;
+  thm LE_SPEC: "LE" = 257;
 
-  term LT: "lt" = 32;
-    thm LT_T: "ltT" = 144;
-    thm LT_DEF: "LT_DEF" = 144;
-    thm LT_SPEC: "LT" = 144;
+  term LT: "lt" = 62;
+  thm LT_T: "ltT" = 258;
+  thm LT_DEF: "lt_DEF" = 260;
+  thm LT_SPEC: "LT" = 261;
 
-  term GE: "ge" = 32;
-    thm GE_T: "geT" = 144;
-    thm GE_BD: "GE_BD" = 144;
-    thm GE_DEF: "GE_DEF" = 144;
+  term GE: "ge" = 64;
+  thm GE_T: "geT" = 263;
+  thm GE_BD: "ge_BD" = 264;
+  thm GE_DEF: "ge_DEF" = 265;
 
-  term GT: "gt" = 32;
-    thm GT_T: "gtT" = 144;
-    thm GT_BD: "GT_BD" = 144;
-    thm GT_DEF: "GT_DEF" = 144;
+  term GT: "gt" = 65;
+  thm GT_T: "gtT" = 266;
+  thm GT_BD: "gt_BD" = 267;
+  thm GT_DEF: "gt_DEF" = 268;
 
-  term EVEN: "even" = 32;
-    thm EVEN_T: "evenT" = 144;
-    thm EVEN_DEF: "EVEN_DEF" = 144;
-    thm EVEN_SPEC: "EVEN" = 144;
+  term EVEN: "even" = 66;
+  thm EVEN_T: "evenT" = 269;
+  thm EVEN_DEF: "even_DEF" = 270;
+  thm EVEN_SPEC: "EVEN" = 271;
 
-  term ODD: "odd" = 32;
-    thm ODD_T: "oddT" = 144;
-    thm ODD_DEF: "ODD_DEF" = 144;
-    thm ODD_SPEC: "ODD" = 144;
+  term ODD: "odd" = 67;
+  thm ODD_T: "oddT" = 272;
+  thm ODD_DEF: "odd_DEF" = 273;
+  thm ODD_SPEC: "ODD" = 274;
 
-  term SUB: "sub" = 32;
-    thm SUB_T: "subT" = 144;
-    thm SUB_DEF: "SUB_DEF" = 144;
-    thm SUB_SPEC: "SUB" = 144;
+  term SUB: "sub" = 68;
+  thm SUB_T: "subT" = 276;
+  thm SUB_DEF: "sub_DEF" = 278;
+  thm SUB_SPEC: "SUB" = 279;
 
-  term TYPEDEF: "typedef" = 32;
-    thm TYPEDEF_T: "typedefT" = 144;
-    thm TYPEDEF_DEF: "TYPEDEF_DEF" = 144;
+  term TYPEDEF: "TYPEDEF" = 70;
+  thm TYPEDEF_T: "TYPEDEF_T" = 280;
+  thm TYPEDEF_DEF: "TYPEDEF_DEF" = 281;
 
-  thm AND_DEF1: "AND_DEF1" = 62;
-  thm EXISTS_THM: "EXISTS_THM" = 64;
-  thm EU_DEF1: "EU_DEF1" = 65;
-  thm IMP_ANTISYM_AX: "IMP_ANTISYM_AX" = 65;
-  thm BOOL_CASES_AX: "BOOL_CASES_AX" = 65;
-  thm TRUTH: "TRUTH" = 65;
-  thm NOT_TRUE: "NOT_TRUE" = 65;
-  thm EM: "em" = 135;
-  thm PAIR_EQ: "PAIR_EQ" = 65;
-  thm PAIR_SURJ: "PAIR_SURJ" = 65;
-  thm FST_THM: "FST" = 65;
-  thm SND_THM: "SND" = 65;
-  thm IND_SUC_0: "IND_SUC_0" = 65;
-  thm IND_SUC_INJ: "IND_SUC_INJ" = 65;
-  thm NOT_SUC: "NOT_SUC" = 65;
-  thm SUC_INJ: "SUC_INJ" = 65;
-  thm NUM_CASES: "num_CASES" = 65;
-  thm NUM_IND: "num_INDUCTION" = 65;
-  thm NUM_REC: "num_RECURSION" = 65;
-  thm MUL1: "MUL1" = 65;
-  thm LE1: "LE1" = 65;
-  thm GT1: "GT1" = 65;
-  thm GE1: "GE1" = 65;
-  thm ODD1: "ODD1" = 65;
+  thm AND_DEF1: "AND_DEF1" = 102;
+  thm EXISTS_THM: "EXISTS_THM" = 158;
+  thm EU_DEF1: "EU_DEF1" = 156;
+  thm IMP_ANTISYM_AX: "IMP_ANTISYM_AX" = 103;
+  thm BOOL_CASES_AX: "BOOL_CASES_AX" = 161;
+  thm TRUTH: "TRUTH" = 53;
+  thm NOT_TRUE: "NOT_TRUE" = 152;
+  thm EM: "em" = 159;
+  thm PAIR_EQ: "PAIR_EQ" = 178;
+  thm PAIR_SURJ: "PAIR_SURJ" = 179;
+  thm FST_THM: "FST" = 183;
+  thm SND_THM: "SND" = 187;
+  thm IND_SUC_0: "IND_SUC_0" = 201;
+  thm IND_SUC_INJ: "IND_SUC_INJ" = 202;
+  thm NOT_SUC: "NOT_SUC" = 225;
+  thm SUC_INJ: "SUC_INJ" = 226;
+  thm NUM_CASES: "num_CASES" = 227;
+  thm NUM_IND: "num_INDUCTION" = 228;
+  thm NUM_REC: "num_RECURSION" = 229;
+  thm MUL1: "MUL1" = 249;
+  thm LE1: "LE1" = 262;
+  thm ODD1: "ODD1" = 275;
 }
 
 pub fn hol_writer(out: PathBuf, temp: PathBuf) -> io::Result<Mm0Writer> {
-  let mmb = MmbFile::parse(include_bytes!("../../hol.mmb")).unwrap();
+  #[repr(C, align(8))]
+  pub struct Aligned<T: ?Sized>(T);
+  static HOL_MMB: &Aligned<[u8]> = &Aligned(*include_bytes!("../../hol.mmb"));
+  let mmb = MmbFile::parse(&HOL_MMB.0).unwrap();
   #[cfg(debug_assertions)] check_consts(&mmb);
   Mm0Writer::new(out, temp, &mmb)
 }

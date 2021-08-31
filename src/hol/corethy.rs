@@ -209,7 +209,7 @@ impl Environment {
       &["V \"z\" z1", "V \"x1\" z1", "V \"x2\" z1", "V \"x\" z1", "K \"IND_SUC\"",
         "U t2 (U t3 (E (E (A t5 t2) (A t5 t3)) (E t2 t3)))"],
       "S t1 (C t6 (U t4 (N (E (A t5 t4) t1))))");
-    // NUM_REP = \k. !P. P IND_0 /\ (!j. P j ==> P (IND_SUC j)) ==> P i
+    // NUM_REP = (\k. !P. (!j. j = IND_0 \/ (?i. j = IND_SUC i /\ P i) ==> P j) ==> P k))
     self.parse_basic_def("NUM_REP", c::NUM_REP, c::NUM_REP_T, c::NUM_REP_DEF,
       &[ind_ty, "F z1 (K \"bool\")"],
       &["V \"k\" z1", "V \"P\" z2", "V \"j\" z1", "V \"i\" z1",
@@ -399,10 +399,10 @@ impl Environment {
     self.parse_thm(Thm, "LE1", c::LE1, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
       r#"U t1 (U t2 (E (B (K "<=") t1 t2) (D (B (K "<") t1 t2) (E t1 t2))))"#);
     // !m n. m > n <=> n < m
-    self.parse_thm(Thm, "GT1", c::GT1, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+    self.parse_thm(Thm, "GT1", c::GT_DEF, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
       r#"U t1 (U t2 (E (B (K ">") t1 t2) (B (K "<") t2 t1)))"#);
     // !m n. m >= n <=> n <= m
-    self.parse_thm(Thm, "GE1", c::GE1, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
+    self.parse_thm(Thm, "GE1", c::GE_DEF, &[num_ty], &["V \"m\" z1", "V \"n\" z1"],
       r#"U t1 (U t2 (E (B (K ">=") t1 t2) (B (K "<=") t2 t1)))"#);
     self.add_thm_alias(Thm, "EVEN", even);
     // !n. ODD n <=> ~EVEN n

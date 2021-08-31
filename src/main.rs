@@ -1,5 +1,3 @@
-#![recursion_limit="256"]
-
 mod hol {
   pub mod lexer;
   pub mod parser;

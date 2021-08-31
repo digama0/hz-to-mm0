@@ -24,7 +24,14 @@ theorem anll: $ A; B; C |- A $ = '(anwl anl);
 theorem anlr: $ A; B; C |- B $ = '(anwl anr);
 theorem anllr: $ A; B; C; D |- B $ = '(anwl anlr);
 theorem an3lr: $ A; B; C; D; E |- B $ = '(anwl anllr);
+theorem anrl: $ A; (B; C) |- B $ = '(anwr anl);
+theorem anrr: $ A; (B; C) |- C $ = '(anwr anr);
+theorem anrlr: $ A; (B; C; D) |- C $ = '(anwr anlr);
+theorem anrllr: $ A; (B; C; D; E) |- C $ = '(anwr anllr);
 theorem mp (h1: $ G; A |- B $) (h2: $ G |- A $): $ G |- B $ = '(syl (ian id h2) h1);
+theorem anasss (h: $ A; B; C |- D $): $ A; (B; C) |- D $ = '(syl (ian (ian anl anrl) anrr) h);
+theorem anassrs (h: $ A; (B; C) |- D $): $ A; B; C |- D $ = '(syl (ian anll @ ian anlr anr) h);
+theorem an32s (h: $ A; C; B |- D $): $ A; B; C |- D $ = '(syl (ian (ian anll anr) anlr) h);
 
 strict sort type;
 
@@ -128,14 +135,18 @@ theorem sym (h: $ G |- =[A] a = b $): $ G |- =[A] b = a $ =
 
 theorem eqmpr (h1: $ G |- B <=> A $) (h2: $ G |- A $): $ G |- B $ = '(eqmp (sym h1) h2);
 
+theorem betae (G: wff x) (e: term x) (h1: $ G |- x: A $)
+  (H: $ G |- =[A -> B] f = (\ x: A. e) $): $ G |- =[B] f @ x = e $ =
+'(trans (aeq1 H h1) (beta @ appT (eqR2 H) h1));
+
 abstract def T: term = $ =[bool -> bool] (\ x: bool. x) = (\ x: bool. x) $;
-pub theorem T_DEF: $ G |- T <=> =[bool -> bool] (\ x: bool. x) = (\ x: bool. x) $ =
-'(refl @ eqcT (!! lamT x anr) (lamT anr));
-pub theorem TT: $ G |- T: bool $ = '(eqR1 @ !! T_DEF x);
+pub theorem TT: $ G |- T: bool $ = '(eqcT (!! lamT x anr) (lamT anr));
+pub theorem T_DEF: $ G |- T <=> =[bool -> bool] (\ x: bool. x) = (\ x: bool. x) $ = '(refl TT);
 pub theorem TRUTH: $ G |- T $ = '(refl (!! lamT x anr));
 pub theorem EQT_ELIM (h: $ G |- P <=> T $): $ G |- P $ = '(eqmpr h TRUTH);
 pub theorem EQT_INTRO (h: $ G |- P $): $ G |- P <=> T $ = '(ded TRUTH (anwl h));
 theorem a1i (h: $ T |- P $): $ G |- P $ = '(syl TRUTH h);
+theorem trud (h: $ G; T |- P $): $ G |- P $ = '(mp h TRUTH);
 
 term tydef: term > type;
 term abs: term > term;
@@ -143,7 +154,7 @@ term rep: term > term;
 axiom absT: $ T |- P: A -> bool $ > $ G |- P @ t $ > $ G |- abs P: A -> tydef P $;
 axiom repT: $ T |- P: A -> bool $ > $ G |- P @ t $ > $ G |- rep P: tydef P -> A $;
 axiom abs_rep: $ T |- P: A -> bool $ > $ G |- P @ t $ >
-  $ G; a: tydef P |- =[A] abs P @ (rep P @ a) = a $;
+  $ G; a: tydef P |- =[tydef P] abs P @ (rep P @ a) = a $;
 axiom rep_abs: $ T |- P: A -> bool $ > $ G |- P @ t $ >
   $ G; r: A |- P @ r <=> =[A] rep P @ (abs P @ r) = r $;
 
@@ -154,6 +165,8 @@ term sel: type > term;
 axiom selT: $ G |- sel A: (A -> bool) -> A $;
 axiom ax_sel (h: $ G |- P: A -> bool $) (h2: $ G |- P @ x $):
   $ G |- P @ (sel A @ P) $;
+theorem selcT (e: term x) (h: $ G; x: A |- e: bool $): $ G |- sel A @ (\ x: A. e): A $ =
+'(appT selT @ lamT h);
 
 theorem betac (G: wff) (A B: type) {x: term} (t a b: term x)
   (h1: $ G; x: A |- a: B $) (h2: $ G |- t: A $)
@@ -173,14 +186,14 @@ theorem cbv (t u: term x y)
 abstract def and: term = $ \ p: bool. \ q: bool. =[(bool -> bool -> bool) -> bool]
   (\ f: bool -> bool -> bool. f @ p @ q) =
   (\ f: bool -> bool -> bool. f @ T @ T) $;
+pub theorem andT: $ G |- and: bool -> bool -> bool $ =
+'(!! lamT p @ !! lamT q @ eqcT
+  (!! lamT f @ appT (appT anr anllr) anlr)
+  (!! lamT f @ appT (appT anr TT) TT));
 pub theorem AND_DEF: $ G |- =[bool -> bool -> bool] and =
   (\ p: bool. \ q: bool. =[(bool -> bool -> bool) -> bool]
     (\ f: bool -> bool -> bool. f @ p @ q) =
-    (\ f: bool -> bool -> bool. f @ T @ T)) $ =
-'(refl @ !! lamT p @ !! lamT q @ eqcT
-  (!! lamT f @ appT (appT anr anllr) anlr)
-  (!! lamT f @ appT (appT anr TT) TT));
-pub theorem andT: $ G |- and: bool -> bool -> bool $ = '(eqR1 @ !! AND_DEF p q t);
+    (\ f: bool -> bool -> bool. f @ T @ T)) $ = '(refl andT);
 
 def andc (a b) = $ and @ a @ b $; infixl andc: $/\$ prec 35;
 theorem andcT (h1: $ G |- a: bool $) (h2: $ G |- b: bool $): $ G |- a /\ b : bool $ =
@@ -203,7 +216,7 @@ pub theorem CONJ (h1: $ G |- a $) (h2: $ G |- b $): $ G |- a /\ b $ =
 '(eqmpr (andc_def (thmR h1) (thmR h2)) @ !! leq f @
   bineq anr (EQT_INTRO @ anwl h1) (EQT_INTRO @ anwl h2));
 
-pub theorem CONJ_PAIR (h: $ G |- a /\ b $): $ G |- a; b $ =
+theorem CONJ_PAIR (h: $ G |- a /\ b $): $ G |- a; b $ =
 (focus
   (have 'H '(appTR22 (thmR h) andT))
   (have 'H1 '(anld H)) (have 'H2 '(anrd H))
@@ -226,10 +239,10 @@ pub theorem CONJUNCT1 (h: $ G |- a /\ b $): $ G |- a $ = '(anld @ CONJ_PAIR h);
 pub theorem CONJUNCT2 (h: $ G |- a /\ b $): $ G |- b $ = '(anrd @ CONJ_PAIR h);
 
 abstract def imp: term = $ \ p: bool. \ q: bool. (p /\ q) <=> p $;
+pub theorem impT: $ G |- imp: bool -> bool -> bool $ =
+'(!! lamT p @ !! lamT q @ eqcT (andcT anlr anr) anlr);
 pub theorem IMP_DEF: $ G |- =[bool -> bool -> bool] imp =
-  (\ p: bool. \ q: bool. (p /\ q) <=> p) $ =
-'(refl @ !! lamT p @ !! lamT q @ eqcT (andcT anlr anr) anlr);
-pub theorem impT: $ G |- imp: bool -> bool -> bool $ = '(eqR1 @ !! IMP_DEF p q);
+  (\ p: bool. \ q: bool. (p /\ q) <=> p) $ = '(refl impT);
 
 def impc (a b) = $ imp @ a @ b $; infixr impc: $==>$ prec 30;
 theorem impcT (h1: $ G |- a: bool $) (h2: $ G |- b: bool $): $ G |- (a ==> b): bool $ =
@@ -249,6 +262,10 @@ pub theorem MP (h1: $ G |- p ==> q $) (h2: $ G |- p $): $ G |- q $ =
 pub theorem DISCH (hp: $ G |- p: bool $) (hq: $ G |- q: bool $) (h: $ G; p |- q $): $ G |- p ==> q $ =
 '(eqmpr (impc_def hp hq) @ ded (CONJUNCT1 anr) (CONJ anr h));
 
+pub theorem DISCH_ (hp: $ G |- p: bool $) (hq: $ G |- q: bool $) (h: $ G; (D; p) |- q $):
+  $ G; D |- p ==> q $ =
+'(DISCH (anwl hp) (anwl hq) @ anassrs h);
+
 pub theorem UNDISCH (h: $ G |- p ==> q $): $ G; p |- q $ = '(MP (anwl h) anr);
 pub theorem IMP_ANTISYM (h1: $ G |- p ==> q $) (h2: $ G |- q ==> p $): $ G |- p <=> q $ =
 '(ded (UNDISCH h1) (UNDISCH h2));
@@ -262,10 +279,10 @@ pub theorem IMP_TRANS (h1: $ G |- p ==> q $) (h2: $ G |- q ==> r $): $ G |- p ==
 '(DISCH (anld @ impR h1) (anrd @ impR h2) @ syl (ian anl (UNDISCH h1)) (UNDISCH h2));
 
 abstract def all (A) = $ \ P: A -> bool. =[A -> bool] P = (\ x: A. T) $;
+pub theorem allT: $ G |- all A: (A -> bool) -> bool $ =
+'(!! lamT P @ eqcT anr @ !! lamT x TT);
 pub theorem FORALL_DEF: $ G |- =[(A -> bool) -> bool] all A =
-  (\ P: A -> bool. =[A -> bool] P = (\ x: A. T)) $ =
-'(refl @ !! lamT P @ eqcT anr @ !! lamT x TT);
-pub theorem allT: $ G |- all A: (A -> bool) -> bool $ = '(eqR1 @ !! FORALL_DEF P x);
+  (\ P: A -> bool. =[A -> bool] P = (\ x: A. T)) $ = '(refl allT);
 theorem all_def (G: wff x) (P: term x) (h: $ G |- P: A -> bool $): $ G |- all A @ P <=>
   =[A -> bool] P = (\ x: A. T) $ =
 '(!! betac p (lamTR allT) h (eqcT h @ a1i @ !! lamT x TT) (bineq1 eqT anr (a1i @ lamT TT)));
@@ -294,15 +311,34 @@ pub theorem SPEC (t a b: term x) (h1: $ G |- t: A $) (h2: $ G |- b: bool $)
 pub theorem GEN (a: term x) (h: $ G; x: A |- a $): $ G |- !x: A. a $ =
 '(eqmpr (all_def @ lamT @ thmR h) @ leq @ EQT_INTRO h);
 
+pub theorem GEN_ (a: term x) (h: $ G; x: A; D |- a $): $ G; D |- !x: A. a $ =
+'(GEN @ an32s h);
+
+theorem betag1 (e: term x) (H: $ G |- =[A -> B] f = (\ x: A. e) $):
+  $ G |- !x: A. =[B] f @ x = e $ =
+'(GEN @ betae anr @ anwl H);
+
+theorem betag2 (e: term x y) (H: $ G |- =[A -> B -> C] f = (\ x: A. \ y: B. e) $):
+  $ G |- !x: A. !y: B. =[C] f @ x @ y = e $ =
+'(GEN @ GEN @ betae anr @ anwl @ betae anr @ anwl H);
+
+axiom AND_DEF1: $ G |- =[bool -> bool -> bool] and =
+  (\ p: bool. \ q: bool. !t: bool. (p ==> q ==> t) ==> t) $; -- TODO
+
+pub theorem IMP_ANTISYM_AX: $ G |- !t1: bool. !t2: bool.
+  (t1 ==> t2) ==> (t2 ==> t1) ==> (t1 <=> t2) $ =
+'(GEN @ GEN @ DISCH (impcT anlr anr) (impcT (impcT anr anlr) @ eqcT anlr anr) @
+  DISCH_ (impcT anr anlr) (eqcT anlr anr) @ IMP_ANTISYM anrl anrr);
+
 pub theorem ETA_AX (G: wff) (A B: type) {e x: term}:
   $ G |- !e: A -> B. =[A -> B] (\ x: A. e @ x) = e $ =
 '(GEN @ eta anr);
 
 abstract def ex (A) = $ \ P: A -> bool. !q: bool. (!x: A. P @ x ==> q) ==> q $;
+theorem exT: $ G |- ex A: (A -> bool) -> bool $ =
+'(!! lamT P @ !! allcT q @ impcT (!! allcT x @ impcT (appT anllr anr) anlr) anr);
 pub theorem EXISTS_DEF: $ G |- =[(A -> bool) -> bool] ex A =
-  (\ P: A -> bool. !q: bool. (!x: A. P @ x ==> q) ==> q) $ =
-'(refl @ !! lamT P @ !! allcT q @ impcT (!! allcT x @ impcT (appT anllr anr) anlr) anr);
-theorem exT: $ G |- ex A: (A -> bool) -> bool $ = '(eqR1 @ !! EXISTS_DEF P q x);
+  (\ P: A -> bool. !q: bool. (!x: A. P @ x ==> q) ==> q) $ = '(refl exT);
 theorem ex_def (G: wff x) (P: term) (h: $ G |- P: A -> bool $):
   $ G |- ex A @ P <=> (!q: bool. (!x: A. P @ x ==> q) ==> q) $ =
 '(syl h @ !! betac p (lamTR exT) id
@@ -350,7 +386,7 @@ theorem existsv (a: term x) (h1: $ G |- x: A $) (h2: $ G |- a $): $ G |- ?x: A. 
 (focus (have 'hl '(lamT @ anwl @ thmR h2)) '(existsp hl @ eqmpr (beta @ appT hl h1) h2));
 
 theorem select_T {x: term} (G: wff x): $ G |- sel A @ (\ x: A. T): A $ =
-'(a1i @ appT selT @ lamT TT);
+'(a1i @ selcT TT);
 
 theorem dummy {x: term} (h: $ G |- a: bool $) (h2: $ G; x: A |- a $): $ G |- a $ =
 '(!! CHOOSE x h (EXISTS (anwl h) (!! select_T y)
@@ -366,7 +402,7 @@ theorem absT2 (h1: $ T |- P: A -> bool $) (h2: $ G |- ?x: A. P @ x $):
 theorem repT2 (h1: $ T |- P: A -> bool $) (h2: $ G |- ?x: A. P @ x $):
   $ G |- rep P: tydef P -> A $ = '(repT h1 @ exsel (a1i h1) h2);
 theorem abs_rep2 (h1: $ T |- P: A -> bool $) (h2: $ G |- ?x: A. P @ x $):
-  $ G; a: tydef P |- =[A] abs P @ (rep P @ a) = a $ = '(abs_rep h1 @ exsel (a1i h1) h2);
+  $ G; a: tydef P |- =[tydef P] abs P @ (rep P @ a) = a $ = '(abs_rep h1 @ exsel (a1i h1) h2);
 theorem rep_abs2 (h1: $ T |- P: A -> bool $) (h2: $ G |- ?x: A. P @ x $):
   $ G; r: A |- P @ r <=> =[A] rep P @ (abs P @ r) = r $ = '(rep_abs h1 @ exsel (a1i h1) h2);
 
@@ -375,16 +411,16 @@ theorem absT3 (h1: $ T |- P: A -> bool $) (h2: $ G |- ex A @ P $):
 theorem repT3 (h1: $ T |- P: A -> bool $) (h2: $ G |- ex A @ P $):
   $ G |- rep P: tydef P -> A $ = '(repT h1 @ exsel2 (a1i h1) h2);
 theorem abs_rep3 (h1: $ T |- P: A -> bool $) (h2: $ G |- ex A @ P $):
-  $ G; a: tydef P |- =[A] abs P @ (rep P @ a) = a $ = '(abs_rep h1 @ exsel2 (a1i h1) h2);
+  $ G; a: tydef P |- =[tydef P] abs P @ (rep P @ a) = a $ = '(abs_rep h1 @ exsel2 (a1i h1) h2);
 theorem rep_abs3 (h1: $ T |- P: A -> bool $) (h2: $ G |- ex A @ P $):
   $ G; r: A |- P @ r <=> =[A] rep P @ (abs P @ r) = r $ = '(rep_abs h1 @ exsel2 (a1i h1) h2);
 
 abstract def or: term = $ \ p: bool. \ q: bool. !r: bool. (p ==> r) ==> (q ==> r) ==> r $;
-pub theorem OR_DEF: $ G |- =[bool -> bool -> bool] or =
-  (\ p: bool. \ q: bool. !r: bool. (p ==> r) ==> (q ==> r) ==> r) $ =
-'(refl @ !! lamT p @ !! lamT q @ !! allcT r @
+pub theorem orT: $ G |- or: bool -> bool -> bool $ =
+'(!! lamT p @ !! lamT q @ !! allcT r @
   impcT (impcT anllr anr) @ impcT (impcT anlr anr) anr);
-pub theorem orT: $ G |- or: bool -> bool -> bool $ = '(eqR1 @ !! OR_DEF p q r);
+pub theorem OR_DEF: $ G |- =[bool -> bool -> bool] or =
+  (\ p: bool. \ q: bool. !r: bool. (p ==> r) ==> (q ==> r) ==> r) $ = '(refl orT);
 
 def orc (a b) = $ or @ a @ b $; infixl orc: $\/$ prec 30;
 theorem orcT (h1: $ G |- a: bool $) (h2: $ G |- b: bool $): $ G |- (a \/ b): bool $ =
@@ -407,10 +443,16 @@ pub theorem DISJ1 (h1: $ G |- p $) (h2: $ G |- q: bool $): $ G |- p \/ q $ =
   DISCH (impcT (anwl @ thmR h1) anr) (impcT (impcT (anwl h2) anr) anr) @
   DISCH (impcT (anwll h2) anlr) anlr @ anwl @ MP anr @ anwll h1);
 
+pub theorem DISJ1_ (h1: $ G; D |- p $) (h2: $ G |- q: bool $): $ G; D |- p \/ q $ =
+'(DISJ1 h1 (anwl h2));
+
 pub theorem DISJ2 (h1: $ G |- p: bool $) (h2: $ G |- q $): $ G |- p \/ q $ =
 '(eqmpr (orc_def h1 (thmR h2)) @ !! GEN r @
   DISCH (impcT (anwl h1) anr) (impcT (impcT (anwl @ thmR h2) anr) anr) @
   anwl @ DISCH (impcT (anwl @ thmR h2) anr) anr @ MP anr @ anwll h2);
+
+pub theorem DISJ2_ (h1: $ G |- p: bool $) (h2: $ G; D |- q $): $ G; D |- p \/ q $ =
+'(DISJ2 (anwl h1) h2);
 
 pub theorem DISJ_CASES (h: $ G |- p \/ q $) (hr: $ G |- r: bool $)
   (h1: $ G; p |- r $) (h2: $ G; q |- r $): $ G |- r $ =
@@ -420,16 +462,21 @@ pub theorem DISJ_CASES (h: $ G |- p \/ q $) (hr: $ G |- r: bool $)
   '(bineq impT (bineq2 impT (anwl hp) anr) @
     bineq impT (bineq2 impT (anwl hq) anr) anr));
 
+pub theorem DISJ_CASES_ (h: $ G; D |- p \/ q $) (hr: $ G |- r: bool $)
+  (h1: $ G; (D; p) |- r $) (h2: $ G; (D; q) |- r $): $ G; D |- r $ =
+'(DISJ_CASES h (anwl hr) (anassrs h1) (anassrs h2));
+
 abstract def F: term = $ !p: bool. p $;
-pub theorem F_DEF: $ G |- F <=> (!p: bool. p) $ = '(refl @ !! allcT p anr);
-pub theorem FT: $ G |- F: bool $ = '(eqR1 @ !! F_DEF x);
+pub theorem FT: $ G |- F: bool $ = '(!! allcT p anr);
+pub theorem F_DEF: $ G |- F <=> (!p: bool. p) $ = '(refl FT);
 pub theorem CONTR (p: term) (h: $ G |- p: bool $) (h2: $ G |- F $): $ G |- p $ =
 '(!! SPEC x h h anr @ eqmp F_DEF h2);
+pub theorem CONTR_ (p: term) (h: $ G |- p: bool $) (h2: $ G; D |- F $): $ G; D |- p $ =
+'(CONTR (anwl h) h2);
 
 abstract def not: term = $ \ p: bool. p ==> F $;
-pub theorem NOT_DEF: $ G |- =[bool -> bool] not = (\ p: bool. p ==> F) $ =
-'(refl @ !! lamT p @ impcT anr FT);
-pub theorem notT: $ G |- not: bool -> bool $ = '(eqR1 @ !! NOT_DEF p);
+pub theorem notT: $ G |- not: bool -> bool $ = '(!! lamT p @ impcT anr FT);
+pub theorem NOT_DEF: $ G |- =[bool -> bool] not = (\ p: bool. p ==> F) $ = '(refl notT);
 
 def notc (p) = $ not @ p $;
 prefix notc: $~$ prec 100;
@@ -445,13 +492,16 @@ pub theorem EQF_INTRO (h: $ G |- ~p $): $ G |- p <=> F $ =
 pub theorem EQF_ELIM (h: $ G |- p <=> F $): $ G |- ~p $ = '(NOT_INTRO @ EQ_IMP1 h);
 pub theorem NOT_FALSE: $ G |- ~F $ = '(NOT_INTRO @ IMP_ID FT);
 
+pub theorem NOT_TRUE: $ G |- ~T <=> F $ =
+'(EQF_INTRO @ NOT_INTRO @ DISCH (notcT TT) FT @ MP (NOT_ELIM anr) TRUTH);
+
 abstract def eu (A) = $ \ P: A -> bool. ex A @ P /\
   (!x: A. !y: A. P @ x /\ P @ y ==> =[A] x = y) $;
-pub theorem EU_DEF: $ G |- =[(A -> bool) -> bool] eu A =
-  (\ P: A -> bool. ex A @ P /\ (!x: A. !y: A. P @ x /\ P @ y ==> =[A] x = y)) $ =
-'(refl @ !! lamT P @ andcT (appT exT anr) @ !! allcT x @ !! allcT y @
+pub theorem euT: $ G |- eu A: (A -> bool) -> bool $ =
+'(!! lamT P @ andcT (appT exT anr) @ !! allcT x @ !! allcT y @
   impcT (andcT (appT anllr anlr) @ appT anllr anr) @ eqcT anlr anr);
-pub theorem euT: $ G |- eu A: (A -> bool) -> bool $ = '(eqR1 @ !! EU_DEF P q x);
+pub theorem EU_DEF: $ G |- =[(A -> bool) -> bool] eu A =
+  (\ P: A -> bool. ex A @ P /\ (!x: A. !y: A. P @ x /\ P @ y ==> =[A] x = y)) $ = '(refl euT);
 theorem eu_def (G: wff x) (P: term) (h: $ G |- P: A -> bool $):
   $ G |- eu A @ P <=> ex A @ P /\ (!x: A. !y: A. P @ x /\ P @ y ==> =[A] x = y) $ =
 '(syl h @ !! betac p (lamTR euT) id
@@ -461,8 +511,13 @@ theorem eu_def (G: wff x) (P: term) (h: $ G |- P: A -> bool $):
    bineq1 impT (bineq andT (aeq1 anllr anlr) (aeq1 anllr anr)) @
    eqcT anlr anr));
 
+axiom EU_DEF1: $ G |- =[(A -> bool) -> bool] eu A =
+  (\ P: A -> bool. ?t: A. P @ t /\ (!x: A. P @ x ==> =[A] x = t)) $; -- TODO
+
 pub theorem SELECT_AX: $ G |- !P: A -> bool. !x: A. P @ x ==> P @ (sel A @ P) $ =
 '(GEN @ GEN @ DISCH (appT anlr anr) (appT anlr @ appT selT anlr) @ ax_sel anllr anr);
+
+axiom EXISTS_THM: $ G |- =[(A -> bool) -> bool] ex A = P @ (sel A @ P) $; -- TODO
 
 pub theorem em (h: $ G |- p: bool $): $ G |- p \/ ~p $ =
 (focus
@@ -470,13 +525,19 @@ pub theorem em (h: $ G |- p: bool $): $ G |- p \/ ~p $ =
   (def (F k y t e)
     (def a '(orcT ,(k 'anr) @ anwl h))
     (def (f x) '(betac ,a ,x (orcT ,(k x) h) @ bineq1 orT ,y @ anwl h))
-    '(eqmp ,(f '(appT selT @ lamT ,a)) @ ax_sel (lamT ,a) @ eqmpr ,(f t) @ DISJ1 ,e h))
+    '(eqmp ,(f '(selcT ,a)) @ ax_sel (lamT ,a) @ eqmpr ,(f t) @ DISJ1 ,e h))
   '(DISJ_CASES ,(F (fn (x) x) 'anr 'TT 'TRUTH) H _ (DISJ1 anr @ anwl h2))
   '(DISJ_CASES (anwl ,(F (fn (x) '(notcT ,x)) '(aeq2 notT anr) 'FT 'NOT_FALSE))
     (anwl H) _ (DISJ1 anr @ anwll h2))
   '(DISJ2 (anwll h) @ NOT_INTRO @ DISCH (anwll h) FT @ MP (NOT_ELIM anlr) @ eqmp _ anllr)
   '(anwr @ aeq2 selT @ !! leq x @
     trans (EQT_INTRO @ DISJ2 anr anl) @ sym (EQT_INTRO @ DISJ2 (notcT anr) anl)));
+pub theorem em_ (h: $ G |- p: bool $): $ G; D |- p \/ ~p $ = '(anwl @ em h);
+
+pub theorem BOOL_CASES_AX: $ G |- !t: bool. (t <=> T) \/ (t <=> F) $ =
+'(trud @ GEN_ @ DISJ_CASES_ (em_ anr) (orcT (eqcT anr TT) (eqcT anr FT))
+  (DISJ1_ (EQT_INTRO anrr) (eqcT anr FT))
+  (DISJ2_ (eqcT anr TT) @ EQF_INTRO anrr));
 
 pub theorem CCONTR (h: $ G |- p: bool $) (h2: $ G; ~p |- F $): $ G |- p $ =
 '(DISJ_CASES (em h) h anr @ CONTR (anwl h) h2);
@@ -484,14 +545,17 @@ pub theorem CCONTR (h: $ G |- p: bool $) (h2: $ G; ~p |- F $): $ G |- p $ =
 def COND (A) = $ \ t: bool. \ t1: A. \ t2: A. sel A @ (\ x: A.
   ((t <=> T) ==> =[A] x = t1) /\ ((t <=> F) ==> =[A] x = t2)) $;
 theorem condT: $ G |- COND A: bool -> A -> A -> A $ =
-'(!! lamT t @ !! lamT t1 @ !! lamT t2 @ appT selT @ !! lamT x @ andcT
+'(!! lamT t @ !! lamT t1 @ !! lamT t2 @ !! selcT x @ andcT
   (impcT (eqcT an3lr TT) (eqcT anr anllr)) (impcT (eqcT an3lr FT) (eqcT anr anlr)));
-axiom COND_DEF: $ G |- F $; -- TODO
+theorem COND_DEF: $ G |- =[bool -> A -> A -> A] COND A =
+  (\ t: bool. \ t1: A. \ t2: A. sel A @ (\ x: A.
+    ((t <=> T) ==> =[A] x = t1) /\ ((t <=> F) ==> =[A] x = t2))) $ = '(refl condT);
 
 def mk_pair (A B) = $ \ x: A. \ y: B. \ a: A. \ b: B. (=[A] a = x /\ =[B] b = y) $;
 theorem mk_pairT: $ G |- mk_pair A B: A -> B -> A -> B -> bool $ =
 '(!! lamT x @ !! lamT y @ !! lamT a @ !! lamT b @ andcT (eqcT anlr an3lr) (eqcT anr anllr));
-axiom mk_pair_DEF: $ G |- F $; -- TODO
+theorem mk_pair_DEF: $ G |- =[A -> B -> A -> B -> bool] mk_pair A B =
+  (\ x: A. \ y: B. \ a: A. \ b: B. (=[A] a = x /\ =[B] b = y)) $ = '(refl mk_pairT);
 
 theorem pair_rep (hf: $ G |- f: A -> B -> C $): $ G |- ?x: C. ?a: A. ?b: B. =[C] x = f @ a @ b $ =
 (focus
@@ -514,43 +578,76 @@ theorem PROD_THM_T: $ T |- \ x: A -> B -> bool.
 '(appTR2 (thmR PROD_THM) exT);
 abstract def prod (A B) = $ tydef (\ x: A -> B -> bool.
   ?a: A. ?b: B. =[A -> B -> bool] x = mk_pair A B @ a @ b) $;
+infixr prod: $#$ prec 30;
 abstract def ABS_prod (A B) = $ abs (\ x: A -> B -> bool.
   ?a: A. ?b: B. =[A -> B -> bool] x = mk_pair A B @ a @ b) $;
-axiom ABS_prodT: $ G |- F $; -- TODO
+pub theorem ABS_prodT: $ G |- ABS_prod A B: (A -> B -> bool) -> A # B $ =
+'(absT3 (!! PROD_THM_T x u v) PROD_THM);
 abstract def REP_prod (A B) = $ rep (\ x: A -> B -> bool.
   ?a: A. ?b: B. =[A -> B -> bool] x = mk_pair A B @ a @ b) $;
-axiom REP_prodT: $ G |- F $; -- TODO
-theorem prod_tybij1 (h: $ G |- a: prod A B $): $ G |-
-  =[A -> B -> bool] ABS_prod A B @ (REP_prod A B @ a) = a $ =
+pub theorem REP_prodT: $ G |- REP_prod A B: A # B -> A -> B -> bool $ =
+'(repT3 (!! PROD_THM_T x u v) PROD_THM);
+theorem prod_tybij1 (h: $ G |- a: A # B $): $ G |-
+  =[A # B] ABS_prod A B @ (REP_prod A B @ a) = a $ =
 '(mp (abs_rep3 (!! PROD_THM_T x u v) PROD_THM) h);
 theorem prod_tybij2 (h: $ G |- r: A -> B -> bool $): $ G |-
   (\ v: A -> B -> bool. ?y: A. ?u: B. =[A -> B -> bool] v = mk_pair A B @ y @ u) @ r <=>
   =[A -> B -> bool] REP_prod A B @ (ABS_prod A B @ r) = r $ =
 '(mp (rep_abs3 (!! PROD_THM_T y u v) PROD_THM) h);
-axiom PROD_BIJ1: $ G |- F $; -- TODO
-axiom PROD_BIJ2: $ G |- F $; -- TODO
+pub theorem PROD_BIJ1: $ G |- !a: A # B.
+  =[A # B] ABS_prod A B @ (REP_prod A B @ a) = a $ =
+'(GEN @ prod_tybij1 anr);
+pub theorem PROD_BIJ2: $ G |- !r: A -> B -> bool.
+  (\ v: A -> B -> bool. ?y: A. ?u: B. =[A -> B -> bool] v = mk_pair A B @ y @ u) @ r <=>
+  =[A -> B -> bool] REP_prod A B @ (ABS_prod A B @ r) = r $ =
+'(GEN @ prod_tybij2 anr);
 
-abstract def pr = $ F $; -- TODO
-axiom prT: $ G |- F $; -- TODO
-axiom PAIR_DEF: $ G |- F $; -- TODO
+abstract def pr (A B) = $ \ x: A. \ y: B. ABS_prod A B @ (mk_pair A B @ x @ y) $;
+pub theorem prT: $ G |- pr A B: A -> B -> A # B $ =
+'(!! lamT x @ !! lamT y @ appT ABS_prodT @ appT (appT mk_pairT anlr) anr);
+pub theorem PAIR_DEF: $ G |- =[A -> B -> A # B] pr A B =
+  (\ x: A. \ y: B. ABS_prod A B @ (mk_pair A B @ x @ y)) $ = '(refl prT);
 
-abstract def fst = $ F $; -- TODO
-axiom fstT: $ G |- F $; -- TODO
-axiom FST_DEF: $ G |- F $; -- TODO
-axiom FST: $ G |- F $; -- TODO
+axiom PAIR_EQ: $ G |- !x: A. !y: B. !a: A. !b: B.
+  =[A # B] pr A B @ x @ y = pr A B @ a @ b <=> =[A] x = a /\ =[B] y = b $; -- TODO
 
-abstract def snd = $ F $; -- TODO
-axiom sndT: $ G |- F $; -- TODO
-axiom SND_DEF: $ G |- F $; -- TODO
-axiom SND: $ G |- F $; -- TODO
+axiom PAIR_SURJ: $ G |- !p: A # B. ?x: A. ?y: B. =[A # B] p = pr A B @ x @ y $; -- TODO
+
+abstract def fst (A B) = $ \ p: A # B. sel A @ (\ x: A. ?y: B. =[A # B] p = pr A B @ x @ y) $;
+pub theorem fstT: $ G |- fst A B: A # B -> A $ =
+'(!! lamT p @ !! selcT x @ !! excT y @ eqcT anllr @ appT (appT prT anlr) anr);
+pub theorem FST_DEF: $ G |- =[A # B -> A] fst A B =
+  (\ p: A # B. sel A @ (\ x: A. ?y: B. =[A # B] p = pr A B @ x @ y)) $ = '(refl fstT);
+axiom fstpr (h1: $ G |- x: A $) (h2: $ G |- y: B $):
+  $ G |- =[A] fst A B @ (pr A B @ x @ y) = x $; -- TODO
+pub theorem FST: $ G |- !x: A. !y: B. =[A] fst A B @ (pr A B @ x @ y) = x $ =
+'(GEN @ GEN @ fstpr anlr anr);
+
+abstract def snd (A B) = $ \ p: A # B. sel B @ (\ y: B. ?x: A. =[A # B] p = pr A B @ x @ y) $;
+pub theorem sndT: $ G |- snd A B: A # B -> B $ =
+'(!! lamT p @ !! selcT y @ !! excT x @ eqcT anllr @ appT (appT prT anr) anlr);
+pub theorem SND_DEF: $ G |- =[A # B -> B] snd A B =
+  (\ p: A # B. sel B @ (\ y: B. ?x: A. =[A # B] p = pr A B @ x @ y)) $ = '(refl sndT);
+axiom sndpr (h1: $ G |- x: A $) (h2: $ G |- y: B $):
+  $ G |- =[A] fst A B @ (pr A B @ x @ y) = y $; -- TODO
+pub theorem SND: $ G |- !x: A. !y: B. =[A] fst A B @ (pr A B @ x @ y) = y $ =
+'(GEN @ GEN @ sndpr anlr anr);
 
 abstract def one_one (A B) = $ \ f: A -> B. !x1: A. !x2: A.
   =[B] f @ x1 = f @ x2 ==> =[A] x1 = x2 $;
 pub theorem one_one_T: $ G |- one_one A B: (A -> B) -> bool $ =
 '(!! lamT f @ !! allcT x1 @ !! allcT x2 @
   impcT (eqcT (appT anllr anlr) (appT anllr anr)) (eqcT anlr anr));
-axiom one_one_BD: $ G |- F $; -- TODO
-axiom one_one_DEF: $ G |- F $; -- TODO
+pub theorem one_one_BD: $ G |- =[(A -> B) -> bool] one_one A B =
+  (\ f: A -> B. !x1: A. !x2: A. =[B] f @ x1 = f @ x2 ==> =[A] x1 = x2) $ = '(refl one_one_T);
+theorem one_one_def (h: $ G |- f: A -> B $): $ G |- one_one A B @ f <=>
+  (!x1: A. !x2: A. =[B] f @ x1 = f @ x2 ==> =[A] x1 = x2) $ =
+'(!! betac g (lamTR one_one_T) h
+  (!! allcT x1 @ !! allcT x2 @
+    impcT (eqcT (appT (anwll h) anlr) (appT (anwll h) anr)) (eqcT anlr anr)) @
+  alleq @ alleq @ bineq1 impT (bineq eqT (aeq1 anllr anlr) (aeq1 anllr anr)) (eqcT anlr anr));
+pub theorem one_one_DEF: $ G |- !f: A -> B. one_one A B @ f <=>
+  (!x1: A. !x2: A. =[B] f @ x1 = f @ x2 ==> =[A] x1 = x2) $ = '(GEN @ one_one_def anr);
 pub theorem ONE_ONE (h: $ G |- f: A -> B $):
   $ G |- one_one A B @ f <=> (!x1: A. !x2: A.
     =[B] f @ x1 = f @ x2 ==> =[A] x1 = x2) $ =
@@ -562,8 +659,15 @@ pub theorem ONE_ONE (h: $ G |- f: A -> B $):
 abstract def onto (A B) = $ \ f: A -> B. !y: B. ?x: A. =[B] y = f @ x $;
 pub theorem onto_T: $ G |- onto A B: (A -> B) -> bool $ =
 '(!! lamT f @ !! allcT y @ !! excT x @ eqcT anlr @ appT anllr anr);
-axiom onto_BD: $ G |- F $; -- TODO
-axiom onto_DEF: $ G |- F $; -- TODO
+pub theorem onto_BD: $ G |- =[(A -> B) -> bool] onto A B =
+  (\ f: A -> B. !y: B. ?x: A. =[B] y = f @ x) $ = '(refl onto_T);
+theorem onto_def (h: $ G |- f: A -> B $): $ G |- onto A B @ f <=>
+  (!y: B. ?x: A. =[B] y = f @ x) $ =
+'(!! betac g (lamTR onto_T) h
+  (!! allcT y @ !! excT x @ eqcT anlr @ appT (anwll h) anr) @
+  alleq @ exeq @ bineq2 eqT anlr (aeq1 anllr anr));
+pub theorem onto_DEF: $ G |- !f: A -> B. onto A B @ f <=>
+  (!y: B. ?x: A. =[B] y = f @ x) $ = '(GEN @ onto_def anr);
 pub theorem ONTO (h: $ G |- f: A -> B $):
   $ G |- onto A B @ f <=> (!y: B. ?x: A. =[B] y = f @ x) $ =
 '(betac (!! lamTR g onto_T) h (!! allcT y @ !! excT x @ eqcT anlr @ appT (anwll h) anr) @
@@ -573,140 +677,267 @@ term ind: type;
 axiom inf (G: wff) {f: term}:
   $ G |- ?f: ind -> ind. one_one ind ind @ f /\ ~(onto ind ind @ f) $;
 
-abstract def IND_SUC = $ F $; -- TODO
-axiom IND_SUC_T: $ G |- F $; -- TODO
-axiom IND_SUC_DEF: $ G |- F $; -- TODO
+abstract def IND_SUC =
+  $ sel (ind -> ind) @ (\ f: ind -> ind. ?z: ind.
+    (!x1: ind. !x2: ind. =[ind] f @ x1 = f @ x2 ==> =[ind] x1 = x2) /\
+    (!x: ind. ~(=[ind] f @ x = z))) $;
+pub theorem IND_SUC_T: $ G |- IND_SUC: ind -> ind $ =
+'(!! selcT f @ !! excT z @ andcT
+  (!! allcT x1 @ !! allcT x2 @
+    impcT (eqcT (appT an3lr anlr) (appT an3lr anr)) (eqcT anlr anr))
+  (!! allcT x @ notcT @ eqcT (appT anllr anr) anlr));
+pub theorem IND_SUC_DEF: $ G |- =[ind -> ind] IND_SUC =
+  sel (ind -> ind) @ (\ f: ind -> ind. ?z: ind.
+    (!x1: ind. !x2: ind. =[ind] f @ x1 = f @ x2 ==> =[ind] x1 = x2) /\
+    (!x: ind. ~(=[ind] f @ x = z))) $ = '(refl IND_SUC_T);
 
-abstract def IND_0 = $ F $; -- TODO
-axiom IND_0_T: $ G |- F $; -- TODO
-axiom IND_0_DEF: $ G |- F $; -- TODO
+axiom IND_SUC_0: $ G |- !x: ind. ~(=[ind] f @ IND_0 = z) $; -- TODO
 
-abstract def NUM_REP = $ F $; -- TODO
-axiom NUM_REP_T: $ G |- F $; -- TODO
-axiom NUM_REP_DEF: $ G |- F $; -- TODO
+axiom IND_SUC_INJ: $ G |- !x1: ind. !x2: ind.
+  =[ind] IND_SUC @ x1 = IND_SUC @ x2 <=> =[ind] x1 = x2 $; -- TODO
 
-abstract def num = $ F $; -- TODO
-axiom NUM_THM: $ G |- F $; -- TODO
+abstract def IND_0 = $ sel ind @ (\ z: ind.
+  (!x1: ind. !x2: ind. =[ind] IND_SUC @ x1 = IND_SUC @ x2 ==> =[ind] x1 = x2) /\
+  (!x: ind. ~(=[ind] IND_SUC @ x = z))) $; -- TODO
+pub theorem IND_0_T: $ G |- IND_0: ind $ =
+'(!! selcT z @ andcT
+  (!! allcT x1 @ !! allcT x2 @
+    impcT (eqcT (appT IND_SUC_T anlr) (appT IND_SUC_T anr)) (eqcT anlr anr))
+  (!! allcT x @ notcT @ eqcT (appT IND_SUC_T anr) anlr));
+pub theorem IND_0_DEF: $ G |- =[ind] IND_0 = sel ind @ (\ z: ind.
+  (!x1: ind. !x2: ind. =[ind] IND_SUC @ x1 = IND_SUC @ x2 ==> =[ind] x1 = x2) /\
+  (!x: ind. ~(=[ind] IND_SUC @ x = z))) $ = '(refl IND_0_T); -- TODO
 
-abstract def mk_num = $ F $; -- TODO
-axiom mk_numT: $ G |- F $; -- TODO
+abstract def NUM_REP = $ \ k: ind. !P: ind -> bool.
+  (!j: ind. (=[ind] j = IND_0 \/ (?i: ind. =[ind] j = IND_SUC @ i /\ P @ i)) ==> P @ j)
+  ==> P @ k $;
+pub theorem NUM_REP_T: $ G |- NUM_REP: ind -> bool $ =
+'(!! lamT k @ !! allcT P @ impcT
+   (!! allcT j @ impcT
+      (orcT (eqcT anr IND_0_T) @ !! excT i @
+        andcT (eqcT anlr (appT IND_SUC_T anr)) (appT anllr anr))
+      (appT anlr anr))
+   (appT anr anlr));
+pub theorem NUM_REP_DEF: $ G |- =[ind -> bool] NUM_REP =
+  (\ k: ind. !P: ind -> bool.
+    (!j: ind. (=[ind] j = IND_0 \/ (?i: ind. =[ind] j = IND_SUC @ i /\ P @ i)) ==> P @ j)
+    ==> P @ k) $ = '(refl NUM_REP_T);
 
-abstract def dest_num = $ F $; -- TODO
-axiom dest_numT: $ G |- F $; -- TODO
-axiom NUM_BIJ1: $ G |- F $; -- TODO
-axiom NUM_BIJ2: $ G |- F $; -- TODO
+axiom NUM_THM: $ G |- ?x: ind. NUM_REP @ x $; -- TODO
+abstract def num = $ tydef NUM_REP $;
+abstract def mk_num = $ abs NUM_REP $;
+pub theorem mk_numT: $ G |- mk_num: ind -> num $ = '(absT2 NUM_REP_T @ !! NUM_THM x);
+abstract def dest_num = $ rep NUM_REP $;
+pub theorem dest_numT: $ G |- dest_num: num -> ind $ = '(repT2 NUM_REP_T @ !! NUM_THM x);
+theorem num_tybij1 (h: $ G |- a: num $): $ G |- =[num] mk_num @ (dest_num @ a) = a $ =
+'(mp (abs_rep2 NUM_REP_T @ !! NUM_THM x) h);
+theorem num_tybij2 (h: $ G |- r: ind $):
+  $ G |- NUM_REP @ r <=>  =[ind] dest_num @ (mk_num @ r) = r $ =
+'(mp (rep_abs2 NUM_REP_T @ !! NUM_THM x) h);
+pub theorem NUM_BIJ1: $ G |- !a: num. =[num] mk_num @ (dest_num @ a) = a $ =
+'(GEN @ num_tybij1 anr);
+pub theorem NUM_BIJ2: $ G |- !r: ind. NUM_REP @ r <=> =[ind] dest_num @ (mk_num @ r) = r $ =
+'(GEN @ num_tybij2 anr);
 
-abstract def _0 = $ F $; -- TODO
-axiom _0T: $ G |- F $; -- TODO
-axiom _0_DEF: $ G |- F $; -- TODO
+abstract def _0 = $ mk_num @ IND_0 $;
+axiom _0T: $ G |- _0: num $; -- TODO
+axiom _0_DEF: $ G |- =[num] _0 = mk_num @ IND_0 $; -- TODO
 
-abstract def SUC = $ F $; -- TODO
-axiom SUC_T: $ G |- F $; -- TODO
-axiom SUC_BD: $ G |- F $; -- TODO
-axiom SUC_DEF: $ G |- F $; -- TODO
+abstract def suc = $ \ n: num. mk_num @ (IND_SUC @ (dest_num @ n)) $;
+pub theorem sucT: $ G |- suc: num -> num $ =
+'(!! lamT n @ appT mk_numT @ appT IND_SUC_T @ appT dest_numT anr);
+theorem succT (h: $ G |- n: num $): $ G |- suc @ n: num $ = '(appT sucT h);
+pub theorem suc_BD: $ G |- =[num -> num] suc =
+  (\ n: num. mk_num @ (IND_SUC @ (dest_num @ n))) $ = '(refl sucT);
+pub theorem suc_DEF: $ G |- !n: num. =[num] suc @ n =
+  mk_num @ (IND_SUC @ (dest_num @ n)) $ = '(betag1 suc_BD);
 
-abstract def NUMERAL = $ F $; -- TODO
-axiom NUMERAL_T: $ G |- F $; -- TODO
-axiom NUMERAL_BD: $ G |- F $; -- TODO
-axiom NUMERAL_DEF: $ G |- F $; -- TODO
+abstract def NUMERAL = $ \ n: num. n $;
+pub theorem NUMERAL_T: $ G |- NUMERAL: num -> num $ = '(!! lamT n anr);
+theorem numcT (h: $ G |- n: num $): $ G |- NUMERAL @ n: num $ = '(appT NUMERAL_T h);
+pub theorem NUMERAL_BD: $ G |- =[num -> num] NUMERAL = (\ n: num. n) $ = '(refl NUMERAL_T);
+pub theorem NUMERAL_DEF: $ G |- !n: num. =[num] NUMERAL @ n = n $ = '(betag1 NUMERAL_BD);
 
-abstract def BIT0 = $ F $; -- TODO
-axiom BIT0T: $ G |- F $; -- TODO
-axiom BIT0_DEF: $ G |- F $; -- TODO
+local def c0 = $ NUMERAL @ _0 $; prefix c0: $0$ prec max;
+theorem c0T: $ G |- 0: num $ = '(numcT _0T);
 
-abstract def BIT1 = $ F $; -- TODO
-axiom BIT1T: $ G |- F $; -- TODO
-axiom BIT1_BD: $ G |- F $; -- TODO
-axiom BIT1_DEF: $ G |- F $; -- TODO
+axiom NOT_SUC: $ G |- !n: num. ~(=[num] suc @ n = 0) $; -- TODO
 
-abstract def pre = $ F $; -- TODO
-axiom preT: $ G |- F $; -- TODO
-axiom PRE_DEF: $ G |- F $; -- TODO
-axiom PRE: $ G |- F $; -- TODO
+axiom SUC_INJ: $ G |- !m: num. !n: num. =[num] suc @ m = suc @ n <=> =[num] m = n $; -- TODO
 
-abstract def add = $ F $; -- TODO
-axiom addT: $ G |- F $; -- TODO
-axiom ADD_DEF: $ G |- F $; -- TODO
-axiom ADD: $ G |- F $; -- TODO
+axiom num_CASES: $ G |- !m: num. =[num] m = 0 \/ (?n: num. =[num] m = suc @ n) $; -- TODO
+axiom num_INDUCTION: $ G |- !P: num -> bool.
+  P @ 0 /\ (!n: num. P @ n ==> P @ (suc @ n)) ==> (!n: num. P @ n) $; -- TODO
+axiom num_RECURSION: $ G |- !e: A. !f: A -> num -> A. ?fn: num -> A.
+  =[A] fn @ 0 = e /\ (!n: num. =[A] fn @ (suc @ n) = f @ (fn @ n) @ n) $; -- TODO
 
-abstract def mul = $ F $; -- TODO
-axiom mulT: $ G |- F $; -- TODO
-axiom MUL_DEF: $ G |- F $; -- TODO
-axiom MUL: $ G |- F $; -- TODO
-axiom MUL1: $ G |- F $; -- TODO
+abstract def bit0 = $ sel (num -> num) @ (\ fn: num -> num.
+  =[num] fn @ 0 = 0 /\
+  (!n: num. =[num] fn @ (suc @ n) = suc @ (suc @ (fn @ n)))) $;
+pub theorem bit0T: $ G |- bit0: num -> num $ =
+'(!! selcT f @ andcT (eqcT (appT anr c0T) c0T) @
+  !! allcT n @ eqcT (appT anlr @ succT anr) (succT @ succT @ appT anlr anr));
+theorem bit0cT (h: $ G |- n: num $): $ G |- bit0 @ n: num $ = '(appT bit0T h);
+pub theorem bit0_DEF: $ G |- =[num -> num] bit0 = sel (num -> num) @ (\ fn: num -> num.
+  =[num] fn @ 0 = 0 /\
+  (!n: num. =[num] fn @ (suc @ n) = suc @ (suc @ (fn @ n)))) $ = '(refl bit0T);
 
-abstract def exp = $ F $; -- TODO
-axiom expT: $ G |- F $; -- TODO
-axiom EXP_DEF: $ G |- F $; -- TODO
-axiom EXP: $ G |- F $; -- TODO
+abstract def bit1 = $ \ n: num. suc @ (bit0 @ n) $;
+pub theorem bit1T: $ G |- bit1: num -> num $ = '(!! lamT n @ succT @ bit0cT anr);
+theorem bit1cT (h: $ G |- n: num $): $ G |- bit1 @ n: num $ = '(appT bit1T h);
+pub theorem bit1_BD: $ G |- =[num -> num] bit1 = (\ n: num. suc @ (bit0 @ n)) $ = '(refl bit1T);
+pub theorem bit1_DEF: $ G |- !n: num. =[num] bit1 @ n = suc @ (bit0 @ n) $ = '(betag1 bit1_BD);
 
-abstract def le = $ F $; -- TODO
-axiom leT: $ G |- F $; -- TODO
-axiom LE_DEF: $ G |- F $; -- TODO
-axiom LE: $ G |- F $; -- TODO
-axiom LE1: $ G |- F $; -- TODO
+local def c1 = $ NUMERAL @ (bit1 @ _0) $; prefix c1: $1$ prec max;
+theorem c1T: $ G |- 1: num $ = '(numcT @ bit1cT _0T);
 
-abstract def lt = $ F $; -- TODO
-axiom ltT: $ G |- F $; -- TODO
-axiom LT_DEF: $ G |- F $; -- TODO
-axiom LT: $ G |- F $; -- TODO
+abstract def pre = $ sel (num -> num) @ (\ f: num -> num.
+  =[num] f @ 0 = 0 /\ (!n: num. =[num] f @ (suc @ n) = n)) $;
+pub theorem preT: $ G |- pre: num -> num $ =
+'(!! selcT f @ andcT (eqcT (appT anr c0T) c0T) @ !! allcT n @ eqcT (appT anlr @ succT anr) anr);
+pub theorem pre_DEF: $ G |- =[num -> num] pre = sel (num -> num) @ (\ f: num -> num.
+  =[num] f @ 0 = 0 /\ (!n: num. =[num] f @ (suc @ n) = n)) $ = '(refl preT);
+axiom PRE: $ G |- =[num] pre @ 0 = 0 /\ (!n: num. =[num] pre @ (suc @ n) = n) $; -- TODO
 
-abstract def ge = $ F $; -- TODO
-axiom geT: $ G |- F $; -- TODO
-axiom GE_BD: $ G |- F $; -- TODO
-axiom GE_DEF: $ G |- F $; -- TODO
-axiom GE1: $ G |- F $; -- TODO
+abstract def add = $ sel (num -> num -> num) @ (\ f: num -> num -> num.
+  (!n: num. =[num] f @ 0 @ n = n) /\
+  (!m: num. !n: num. =[num] f @ (suc @ m) @ n = suc @ (f @ m @ n))) $;
+local def addc (a b) = $ add @ a @ b $; infixl addc: $+$ prec 65;
+pub theorem addT: $ G |- add: num -> num -> num $ =
+'(!! selcT f @ andcT (!! allcT n @ eqcT (appT (appT anlr c0T) anr) anr) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr @ succT anlr) anr) @
+  succT @ appT (appT anllr anlr) anr);
+theorem addcT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- a + b: num $ = '(appT (appT addT h1) h2);
+pub theorem add_DEF: $ G |- =[num -> num -> num]
+  add = sel (num -> num -> num) @ (\ f: num -> num -> num.
+    (!n: num. =[num] f @ 0 @ n = n) /\
+    (!m: num. !n: num. =[num] f @ (suc @ m) @ n = suc @ (f @ m @ n))) $ = '(refl addT);
+axiom ADD: $ G |- (!n: num. =[num] 0 + n = n) /\
+  (!m: num. !n: num. =[num] suc @ m + n = suc @ (m + n)) $; -- TODO
 
-abstract def gt = $ F $; -- TODO
-axiom gtT: $ G |- F $; -- TODO
-axiom GT_BD: $ G |- F $; -- TODO
-axiom GT_DEF: $ G |- F $; -- TODO
-axiom GT1: $ G |- F $; -- TODO
+abstract def mul = $ sel (num -> num -> num) @ (\ f: num -> num -> num.
+  (!n: num. =[num] f @ 0 @ n = 0) /\
+  (!m: num. !n: num. =[num] f @ (suc @ m) @ n = f @ m @ n + n)) $;
+local def mulc (a b) = $ mul @ a @ b $; infixl mulc: $*$ prec 70;
+pub theorem mulT: $ G |- mul: num -> num -> num $ =
+'(!! selcT f @ andcT (!! allcT n @ eqcT (appT (appT anlr c0T) anr) c0T) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr @ succT anlr) anr) @
+  addcT (appT (appT anllr anlr) anr) anr);
+theorem mulcT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- a * b: num $ = '(appT (appT mulT h1) h2);
+pub theorem mul_DEF: $ G |- =[num -> num -> num]
+  mul = sel (num -> num -> num) @ (\ f: num -> num -> num.
+    (!n: num. =[num] f @ 0 @ n = 0) /\
+    (!m: num. !n: num. =[num] f @ (suc @ m) @ n = f @ m @ n + n)) $ = '(refl mulT);
+axiom MUL: $ G |- (!n: num. =[num] 0 * n = 0) /\
+  (!m: num. !n: num. =[num] suc @ m * n = m * n + n) $; -- TODO
+axiom MUL1: $ G |- (!n: num. =[num] 0 * n = 0) /\
+  (!m: num. !n: num. =[num] suc @ m * n = n + m * n) $; -- TODO
 
-abstract def even = $ F $; -- TODO
-axiom evenT: $ G |- F $; -- TODO
-axiom EVEN_DEF: $ G |- F $; -- TODO
-axiom EVEN: $ G |- F $; -- TODO
+abstract def exp = $ sel (num -> num -> num) @ (\ f: num -> num -> num.
+  (!m: num. =[num] f @ m @ 0 = 1) /\
+  (!m: num. !n: num. =[num] f @ m @ (suc @ n) = m * f @ m @ n)) $;
+pub theorem expT: $ G |- exp: num -> num -> num $ =
+'(!! selcT f @ andcT (!! allcT m @ eqcT (appT (appT anlr anr) c0T) c1T) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr anlr) (succT anr)) @
+  mulcT anlr @ appT (appT anllr anlr) anr);
+theorem expcT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- exp @ a @ b: num $ = '(appT (appT expT h1) h2);
+pub theorem exp_DEF: $ G |- =[num -> num -> num]
+  exp = sel (num -> num -> num) @ (\ f: num -> num -> num.
+    (!m: num. =[num] f @ m @ 0 = 1) /\
+    (!m: num. !n: num. =[num] f @ m @ (suc @ n) = m * f @ m @ n)) $ = '(refl expT);
+axiom EXP: $ G |- (!m: num. =[num] exp @ m @ 0 = 1) /\
+  (!m: num. !n: num. =[num] exp @ m @ (suc @ n) = m * exp @ m @ n) $; -- TODO
 
-abstract def odd = $ F $; -- TODO
-axiom oddT: $ G |- F $; -- TODO
-axiom ODD_DEF: $ G |- F $; -- TODO
-axiom ODD: $ G |- F $; -- TODO
-axiom ODD1: $ G |- F $; -- TODO
+abstract def le = $ sel (num -> num -> bool) @ (\ f: num -> num -> bool.
+  (!m: num. f @ m @ 0 <=> =[num] m = 0) /\
+  (!m: num. !n: num. f @ m @ (suc @ n) <=> =[num] m = suc @ n \/ f @ m @ n)) $;
+pub theorem leT: $ G |- le: num -> num -> bool $ =
+'(!! selcT f @ andcT (!! allcT m @ eqcT (appT (appT anlr anr) c0T) (eqcT anr c0T)) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr anlr) (succT anr)) @
+  orcT (eqcT anlr @ succT anr) @ appT (appT anllr anlr) anr);
+local def lec (a b) = $ le @ a @ b $; infixl lec: $<=$ prec 50;
+theorem lecT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- a <= b: bool $ = '(appT (appT leT h1) h2);
+pub theorem le_DEF: $ G |- =[num -> num -> bool] le =
+  sel (num -> num -> bool) @ (\ f: num -> num -> bool.
+    (!m: num. f @ m @ 0 <=> =[num] m = 0) /\
+    (!m: num. !n: num. f @ m @ (suc @ n) <=> =[num] m = suc @ n \/ f @ m @ n)) $ = '(refl leT);
+axiom LE: $ G |- (!m: num. m <= 0 <=> =[num] m = 0) /\
+  (!m: num. !n: num. m <= suc @ n <=> =[num] m = suc @ n \/ m <= n) $; -- TODO
 
-abstract def sub = $ F $; -- TODO
-axiom subT: $ G |- F $; -- TODO
-axiom SUB_DEF: $ G |- F $; -- TODO
-axiom SUB: $ G |- F $; -- TODO
+abstract def lt = $ sel (num -> num -> bool) @ (\ f: num -> num -> bool.
+  (!m: num. f @ m @ 0 <=> F) /\
+  (!m: num. !n: num. f @ m @ (suc @ n) <=> =[num] m = n \/ f @ m @ n)) $;
+pub theorem ltT: $ G |- lt: num -> num -> bool $ =
+'(!! selcT f @ andcT (!! allcT m @ eqcT (appT (appT anlr anr) c0T) FT) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr anlr) (succT anr)) @
+  orcT (eqcT anlr anr) @ appT (appT anllr anlr) anr);
+local def ltc (a b) = $ lt @ a @ b $; infixl ltc: $<$ prec 50;
+theorem ltcT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- a < b: bool $ = '(appT (appT ltT h1) h2);
+pub theorem lt_DEF: $ G |- =[num -> num -> bool] lt =
+  sel (num -> num -> bool) @ (\ f: num -> num -> bool.
+    (!m: num. f @ m @ 0 <=> F) /\
+    (!m: num. !n: num. f @ m @ (suc @ n) <=> =[num] m = n \/ f @ m @ n)) $ = '(refl ltT);
+axiom LT: $ G |- (!m: num. m < 0 <=> F) /\
+  (!m: num. !n: num. m < suc @ n <=> =[num] m = n \/ m < n) $; -- TODO
 
-abstract def typedef = $ F $; -- TODO
-axiom typedefT: $ G |- F $; -- TODO
-axiom TYPEDEF_DEF: $ G |- F $; -- TODO
+axiom LE1: $ G |- !m: num. !n: num. m <= n <=> m < n \/ =[num] m = n $; -- TODO
 
-axiom AND_DEF1: $ G |- F $; -- TODO
+abstract def ge = $ \ m: num. \ n: num. n <= m $;
+pub theorem geT: $ G |- ge: num -> num -> bool $ = '(!! lamT m @ !! lamT n @ lecT anr anlr);
+pub theorem ge_BD: $ G |- =[num -> num -> bool] ge = (\ m: num. \ n: num. n <= m) $ = '(refl geT);
+pub theorem ge_DEF: $ G |- !m: num. !n: num. ge @ m @ n <=> n <= m $ = '(betag2 ge_BD);
 
-axiom EXISTS_THM: $ G |- F $; -- TODO
+abstract def gt = $ \ m: num. \ n: num. n < m $;
+pub theorem gtT: $ G |- gt: num -> num -> bool $ = '(!! lamT m @ !! lamT n @ ltcT anr anlr);
+pub theorem gt_BD: $ G |- =[num -> num -> bool] gt = (\ m: num. \ n: num. n < m) $ = '(refl gtT);
+pub theorem gt_DEF: $ G |- !m: num. !n: num. gt @ m @ n <=> n < m $ = '(betag2 gt_BD);
 
-axiom EU_DEF1: $ G |- F $; -- TODO
+abstract def even = $ sel (num -> bool) @ (\ f: num -> bool.
+  (f @ 0 <=> T) /\ (!n: num. f @ (suc @ n) <=> ~(f @ n))) $;
+pub theorem evenT: $ G |- even: num -> bool $ =
+'(!! selcT f @ andcT (eqcT (appT anr c0T) TT) @
+  !! allcT n @ eqcT (appT anlr @ succT anr) (notcT @ appT anlr anr));
+pub theorem even_DEF: $ G |- =[num -> bool] even = sel (num -> bool) @ (\ f: num -> bool.
+  (f @ 0 <=> T) /\ (!n: num. f @ (suc @ n) <=> ~(f @ n))) $ = '(refl evenT);
+axiom EVEN: $ G |- =[num] even @ 0 = 0 /\ (!n: num. =[num] even @ (suc @ n) = n) $; -- TODO
 
-axiom IMP_ANTISYM_AX: $ G |- F $; -- TODO
+abstract def odd = $ sel (num -> bool) @ (\ f: num -> bool.
+  (f @ 0 <=> F) /\ (!n: num. f @ (suc @ n) <=> ~(f @ n))) $;
+pub theorem oddT: $ G |- odd: num -> bool $ =
+'(!! selcT f @ andcT (eqcT (appT anr c0T) FT) @
+  !! allcT n @ eqcT (appT anlr @ succT anr) (notcT @ appT anlr anr));
+pub theorem odd_DEF: $ G |- =[num -> bool] odd = sel (num -> bool) @ (\ f: num -> bool.
+  (f @ 0 <=> F) /\ (!n: num. f @ (suc @ n) <=> ~(f @ n))) $ = '(refl oddT);
+axiom ODD: $ G |- =[num] odd @ 0 = 0 /\ (!n: num. =[num] odd @ (suc @ n) = n) $; -- TODO
+axiom ODD1: $ G |- !n: num. odd @ n <=> ~(even @ n) $; -- TODO
 
-axiom BOOL_CASES_AX: $ G |- F $; -- TODO
+abstract def sub = $ sel (num -> num -> num) @ (\ f: num -> num -> num.
+  (!m: num. =[num] f @ m @ 0 = m) /\
+  (!m: num. !n: num. =[num] f @ m @ (suc @ n) = pre @ (f @ m @ n))) $;
+local def subc (a b) = $ sub @ a @ b $; infixl subc: $-$ prec 65;
+pub theorem subT: $ G |- sub: num -> num -> num $ =
+'(!! selcT f @ andcT (!! allcT m @ eqcT (appT (appT anlr anr) c0T) anr) @
+  !! allcT m @ !! allcT n @ eqcT (appT (appT anllr anlr) @ succT anr) @
+  appT preT @ appT (appT anllr anlr) anr);
+theorem subcT (h1: $ G |- a: num $) (h2: $ G |- b: num $):
+  $ G |- a - b: num $ = '(appT (appT subT h1) h2);
+pub theorem sub_DEF: $ G |- =[num -> num -> num]
+  sub = sel (num -> num -> num) @ (\ f: num -> num -> num.
+    (!m: num. =[num] f @ m @ 0 = m) /\
+    (!m: num. !n: num. =[num] f @ m @ (suc @ n) = pre @ (f @ m @ n))) $ = '(refl subT);
+axiom SUB: $ G |- (!m: num. =[num] m - 0 = m) /\
+  (!m: num. !n: num. =[num] m - suc @ n = pre @ (m - n)) $; -- TODO
 
-axiom NOT_TRUE: $ G |- F $; -- TODO
-
-axiom PAIR_EQ: $ G |- F $; -- TODO
-
-axiom PAIR_SURJ: $ G |- F $; -- TODO
-
-axiom IND_SUC_0: $ G |- F $; -- TODO
-
-axiom IND_SUC_INJ: $ G |- F $; -- TODO
-
-axiom NOT_SUC: $ G |- F $; -- TODO
-
-axiom SUC_INJ: $ G |- F $; -- TODO
-
-axiom num_CASES: $ G |- F $; -- TODO
-axiom num_INDUCTION: $ G |- F $; -- TODO
-axiom num_RECURSION: $ G |- F $; -- TODO
+abstract def TYPEDEF (A B) {.rep} = $ \ P: A -> bool. \ rep: B -> A.
+  one_one B A @ rep /\ (!x: A. P @ x <=> (?y: B. =[A] x = rep @ y)) $;
+pub theorem TYPEDEF_T: $ G |- TYPEDEF A B: (A -> bool) -> (B -> A) -> bool $ =
+'(!! lamT P @ !! lamT r @ andcT (appT one_one_T anr) @ !! allcT x @
+  eqcT (appT anllr anr) @ !! excT y @ eqcT anlr @ appT anllr anr);
+pub theorem TYPEDEF_DEF {rep}: $ G |- =[(A -> bool) -> (B -> A) -> bool] TYPEDEF A B =
+  (\ P: A -> bool. \ rep: B -> A.
+    one_one B A @ rep /\ (!x: A. P @ x <=> (?y: B. =[A] x = rep @ y))) $ = '(refl TYPEDEF_T);
